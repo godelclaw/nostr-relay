@@ -61,14 +61,26 @@ shell:
 `MAILBOX_API_TOKEN` is **per avatar**, shared between that avatar's sandbox and that
 avatar's mailbox container — it is not one fleet-wide value.
 
-## 3. Publish public parts to the shared `registry.json`
+## 3. Build the address book
 
-Add or update the avatar's entry (`npub`, `pubkey_hex`, `did:key`, `dids`, `display`) —
-see `registry.example.json` for the shape. The live file is bind-mounted **read-only** into
-every mailbox, at whatever host path that avatar's `MAILBOX_REGISTRY_HOST_PATH` points to.
+`registry.json` maps name → identity, so a human can say "send this to
+undergryd-software-engineer" and so an arriving message can be logged under a name rather
+than a 64-character key. It is **not** a control surface: a message is trusted because its
+signature verifies.
 
-> Where the live `registry.json` physically lives on the host is **still an open
-> decision** — this component ships the format and the example, not the deployed file.
+Generate it from the keys already in `pass` — no retyping, and the private halves are
+never read:
+
+```sh
+cd <your-path>/applications/tools/nostr-mailbox
+scripts/build-registry undergryd-software-engineer avatar-builder > registry.json
+```
+
+**Each avatar gets its own copy**, materialized with its `tools/nostr-mailbox` and
+writable by it. There is no shared original mounted into every mailbox: avatars will not
+always share a filesystem — with each other or with this relay — and an address book is
+something its holder may extend. Keep your master copy wherever suits (beside this relay
+is fine while both live on your machine) and re-copy it when the fleet gains a member.
 
 A mailbox **refuses to start** unless its own entry exists and the injected key's derived
 pubkey matches that entry (`identity.go`, `loadIdentity`). That is deliberate: a wrong or
@@ -78,7 +90,17 @@ swapped key fails loud instead of misdelivering silently.
 
 Add each avatar's `pubkey_hex` to `pubkey_whitelist` in `config.toml`, then restart the
 relay (`docker compose restart` in this repo). Closed set = no spam/discovery problem
-internally.
+internally. The lines come out of `pass` too:
+
+```sh
+for a in undergryd-software-engineer avatar-builder; do
+    printf '  "%s",\n' "$(pass show "nunet/avatars/$a/nostr-pubkey-hex" | head -1)"
+done
+```
+
+Unlike the address book, this one **is** access control — it is what the relay enforces
+before accepting an event, and it lives with the relay because the relay is what reads
+it.
 
 ## 5. Bring up the shared relay (once)
 
