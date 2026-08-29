@@ -1,9 +1,18 @@
 #!/usr/bin/env bash
-# fleet-keys -- mint, rotate and publish avatar identities across the fleet.
+# mailbox-fleet -- everything about the avatar mailbox fabric, from one place.
 #
-#   scripts/fleet-keys status               what pass, the relay and each avatar hold
-#   scripts/fleet-keys publish [--check]    install + push the current keys everywhere
-#   scripts/fleet-keys rotate AVATAR...     mint NEW keys for these, then publish
+#   scripts/mailbox-fleet                     pick from a menu
+#   scripts/mailbox-fleet status              what pass, the relay and each avatar hold
+#   scripts/mailbox-fleet install [--check] [NAME...]
+#                                             put the mailbox on avatars (default: all)
+#   scripts/mailbox-fleet publish [--check]   install + address book + relay allowlist
+#   scripts/mailbox-fleet rotate NAME...      mint NEW keys for these, then publish
+#   scripts/mailbox-fleet relay-restart       load a changed allowlist
+#
+# One tool because it is one job. Installing the component, handing out the address
+# book and pinning pubkeys in the relay allowlist are the same act seen from three
+# places, and doing them from three scripts means typing avatar paths by hand into
+# whichever one you remembered.
 #
 # Minting a key and syncing the relay allowlist were already one command each.
 # The part that goes wrong by hand is the FAN-OUT: every avatar carries its OWN
@@ -38,8 +47,8 @@ PASS_PREFIX="${PASS_PREFIX:-nunet/avatars}"
 FLEET_FILE="${AGENT_FLEET_FILE:-}"
 CHECK=0
 
-die() { printf '\033[1;31m[fleet-keys]\033[0m %s\n' "$*" >&2; exit 1; }
-log() { printf '\033[1;34m[fleet-keys]\033[0m %s\n' "$*"; }
+die() { printf '\033[1;31m[mailbox-fleet]\033[0m %s\n' "$*" >&2; exit 1; }
+log() { printf '\033[1;34m[mailbox-fleet]\033[0m %s\n' "$*"; }
 trim() { local s="$1"; s="${s#"${s%%[![:space:]]*}"}"; s="${s%"${s##*[![:space:]]}"}"; printf '%s' "$s"; }
 
 CMD=""; declare -a ARGS=()
@@ -53,7 +62,7 @@ while (( $# )); do
     esac
     shift
 done
-CMD="${CMD:-status}"
+CMD="${CMD:-menu}"
 
 command -v pass >/dev/null || die "'pass' is not installed on this host"
 [[ -x "$MAILBOX_REPO/scripts/build-registry" ]] || die "no build-registry at $MAILBOX_REPO (set MAILBOX_REPO)"
@@ -140,6 +149,33 @@ publish() {
     log "$changed registry copies $( (( CHECK )) && echo 'would change' || echo changed), $installed component install(s)"
 }
 
+# ----------------------------------------------------------------- install ---
+# Put (or refresh) the component on avatars. install does the per-avatar copying;
+# knowing which avatars exist and where they live is this script's job.
+install_avatars() {
+    local n dir rc=0
+    for n in "$@"; do
+        dir="${DIROF[$n]:-}"
+        [[ -n "$dir" ]] || { printf '  %-32s not in %s\n' "$n" "$FLEET_FILE"; rc=1; continue; }
+        if (( CHECK )); then
+            printf '  %-32s WOULD install/refresh\n' "$n"; continue
+        fi
+        if "$MAILBOX_REPO/scripts/install" "$dir" --no-registry >/dev/null; then
+            printf '  %-32s component installed/refreshed\n' "$n"
+        else
+            printf '  %-32s INSTALL FAILED\n' "$n"; rc=1
+        fi
+    done
+    echo ""
+    log "the address book is handed out by 'publish' -- run it after installing"
+    return $rc
+}
+
+relay_restart() {
+    log "restarting the relay (config.toml is read only at start)"
+    ( cd "$RELAY_REPO" && docker compose restart nostr-relay )
+}
+
 # ------------------------------------------------------------------ rotate ---
 rotate() {
     (( ${#ARGS[@]} )) || die "rotate needs at least one avatar name"
@@ -181,13 +217,90 @@ status() {
             "$( [[ -d "$mdir" ]] && echo yes || echo no )" \
             "$( if [[ ! -d "$mdir" ]]; then echo "-"; elif cmp -s "$tmp" "$mdir/registry.json"; then echo current; else echo STALE; fi )"
     done
-    printf '\n  a STALE registry, or a no under "in relay", is fixed by:  scripts/fleet-keys publish\n\n'
+    printf '\n  a STALE registry, or a no under "in relay", is fixed by:  scripts/mailbox-fleet publish\n\n'
+}
+
+
+# -------------------------------------------------------------------- menu ---
+# Same shape as harness-core's sync-fleet: the listing IS the status, so choosing
+# what to do and seeing what needs doing are one screen rather than two commands.
+menu() {
+    local conf tmp allow n hex mdir i reply
+    while true; do
+        conf="${CONF:-$RELAY_REPO/config.toml}"
+        allow="$(cat "$conf" 2>/dev/null || true)"
+        tmp="$(mktemp)"
+        local -a keyed; mapfile -t keyed < <(keyed_avatars)
+        (( ${#keyed[@]} )) && "$MAILBOX_REPO/scripts/build-registry" "${keyed[@]}" > "$tmp" 2>/dev/null || true
+
+        echo ""
+        echo "  Mailbox fleet   fleet: $FLEET_FILE"
+        echo "                  relay: $conf"
+        printf '                  --check: %s\n' "$( ((CHECK)) && echo on || echo off )"
+        echo ""
+        printf '    %-3s %-32s %-5s %-10s %-9s %s\n' "#" "avatar" "key" "component" "in relay" "address book"
+        i=1
+        for n in ${NAMES[@]+"${NAMES[@]}"}; do
+            hex=""; has_key "$n" && hex="$(pubkey "$n")"
+            mdir="$(mailbox_dir "$n")"
+            printf '    %-3s %-32s %-5s %-10s %-9s %s\n' "$i)" "$n" \
+                "$( [[ -n "$hex" ]] && echo yes || echo NO )" \
+                "$( [[ -x "$mdir/mailbox" ]] && echo yes || echo no )" \
+                "$( [[ -n "$hex" && "$allow" == *"$hex"* ]] && echo yes || echo no )" \
+                "$( if [[ ! -d "$mdir" ]]; then echo "-"; elif cmp -s "$tmp" "$mdir/registry.json"; then echo current; else echo STALE; fi )"
+            i=$((i+1))
+        done
+        rm -f "$tmp"
+        echo ""
+        echo "    numbers (e.g. 1 3) to install/refresh those     a) all listed"
+        echo "    p) publish -- address book to every avatar + relay allowlist"
+        echo "    k) rotate keys for chosen avatars (MINTS NEW ONES)"
+        echo "    x) restart the relay      c) toggle --check      q) quit"
+        echo ""
+        printf "  Choice: "
+        read -r reply || return 0
+        local -a sel=()
+        case "$reply" in
+            q|Q|"") return 0 ;;
+            c|C) CHECK=$((1-CHECK)); continue ;;
+            x|X) relay_restart; continue ;;
+            p|P) publish; continue ;;
+            k|K)
+                printf "  Rotate which? (numbers, and note this REPLACES their keys): "
+                read -r reply || continue
+                sel=(); local t
+                for t in $reply; do
+                    [[ "$t" =~ ^[0-9]+$ ]] && (( t >= 1 && t <= ${#NAMES[@]} )) \
+                        || { echo "  not a listed number: $t"; sel=(); break; }
+                    sel+=( "${NAMES[$((t-1))]}" )
+                done
+                (( ${#sel[@]} )) || continue
+                printf "  Type ROTATE to confirm for: %s\n  > " "${sel[*]}"
+                read -r reply || continue
+                [[ "$reply" == "ROTATE" ]] || { echo "  cancelled"; continue; }
+                ARGS=( "${sel[@]}" ); rotate; continue ;;
+            a|A) sel=( ${NAMES[@]+"${NAMES[@]}"} ) ;;
+            *)
+                sel=(); local tok
+                for tok in $reply; do
+                    [[ "$tok" =~ ^[0-9]+$ ]] || { echo "  not a number: $tok"; sel=(); break; }
+                    (( tok >= 1 && tok <= ${#NAMES[@]} )) || { echo "  out of range: $tok"; sel=(); break; }
+                    sel+=( "${NAMES[$((tok-1))]}" )
+                done ;;
+        esac
+        (( ${#sel[@]} )) || continue
+        install_avatars "${sel[@]}" || true
+    done
 }
 
 load_fleet
 case "$CMD" in
-    status)  status ;;
-    publish) publish ;;
-    rotate)  rotate ;;
-    *) die "unknown command '$CMD' (status|publish|rotate)" ;;
+    menu)          menu ;;
+    status)        status ;;
+    install)       (( ${#ARGS[@]} )) && install_avatars "${ARGS[@]}" \
+                       || install_avatars ${NAMES[@]+"${NAMES[@]}"} ;;
+    publish)       publish ;;
+    rotate)        rotate ;;
+    relay-restart) relay_restart ;;
+    *) die "unknown command '$CMD' (menu|status|install|publish|rotate|relay-restart)" ;;
 esac
