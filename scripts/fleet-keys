@@ -2,7 +2,7 @@
 # fleet-keys -- mint, rotate and publish avatar identities across the fleet.
 #
 #   scripts/fleet-keys status               what pass, the relay and each avatar hold
-#   scripts/fleet-keys publish [--check]    push the current keys everywhere
+#   scripts/fleet-keys publish [--check]    install + push the current keys everywhere
 #   scripts/fleet-keys rotate AVATAR...     mint NEW keys for these, then publish
 #
 # Minting a key and syncing the relay allowlist were already one command each.
@@ -17,6 +17,11 @@
 # will fail to start, because the container asserts the key it was given matches
 # its registry entry. Minting without publishing leaves the fleet broken, so
 # `rotate` always publishes.
+#
+# `publish` also INSTALLS the mailbox component into any avatar that lacks it, by
+# calling nostr-mailbox/scripts/install. Copying files into one avatar is that
+# script's job; knowing which avatars exist and where they live is this one's, and
+# splitting them just means someone hand-runs a loop over the answer.
 #
 # MAINTAINER-run, host-side. Private keys live only in pass and are never printed
 # -- this reads the public halves only.
@@ -52,6 +57,7 @@ CMD="${CMD:-status}"
 
 command -v pass >/dev/null || die "'pass' is not installed on this host"
 [[ -x "$MAILBOX_REPO/scripts/build-registry" ]] || die "no build-registry at $MAILBOX_REPO (set MAILBOX_REPO)"
+[[ -x "$MAILBOX_REPO/scripts/install" ]] || die "no install at $MAILBOX_REPO/scripts (set MAILBOX_REPO)"
 
 # ------------------------------------------------------------------- fleet ---
 declare -a NAMES=(); declare -A DIROF=()
@@ -88,12 +94,22 @@ publish() {
     log "address book covers ${#keyed[@]} avatar(s): ${keyed[*]}"
     echo ""
 
-    local n mdir changed=0 skipped=0
+    local n mdir changed=0 installed=0
     for n in "${NAMES[@]}"; do
         mdir="$(mailbox_dir "$n")"
-        if [[ ! -d "$mdir" ]]; then
-            printf '  %-32s no tools/nostr-mailbox -- mailbox not materialized here\n' "$n"
-            skipped=$((skipped+1)); continue
+        # An avatar without the component gets it, rather than a report that it does
+        # not have it. Installing is per-avatar file copying; knowing WHICH avatars
+        # and WHERE they live is this script's job, so the two belong together --
+        # otherwise every fleet change ends in a hand-run loop.
+        if [[ ! -d "$mdir" || ! -x "$mdir/mailbox" ]]; then
+            if (( CHECK )); then
+                printf '  %-32s WOULD install the mailbox component\n' "$n"
+                installed=$((installed+1)); continue
+            fi
+            "$MAILBOX_REPO/scripts/install" "${DIROF[$n]}" --no-registry >/dev/null \
+                || { printf '  %-32s INSTALL FAILED\n' "$n"; continue; }
+            printf '  %-32s mailbox component installed\n' "$n"
+            installed=$((installed+1))
         fi
         if cmp -s "$tmp" "$mdir/registry.json"; then
             printf '  %-32s registry.json already current\n' "$n"
@@ -113,19 +129,15 @@ publish() {
         "$RELAY_REPO/scripts/sync-allowlist" "${keyed[@]}"
     fi
 
-    # Restarts are printed, never run. The relay restart briefly stops buffering
-    # for the whole fleet, and every mailbox belongs to an avatar that may be
-    # mid-conversation: both are the operator's call, not a side effect of
-    # publishing.
+    # The relay restart is printed, never run: it briefly stops buffering for the
+    # whole fleet, which is the operator's call rather than a side effect of
+    # publishing. Nothing else needs restarting -- an avatar's mailbox is a script
+    # that reads registry.json when it runs, so a new address book is live at once.
     echo ""
-    echo "  To load what changed:"
-    echo "    cd $RELAY_REPO && docker compose restart nostr-relay    # config.toml is read only at start"
-    for n in "${NAMES[@]}"; do
-        [[ -d "$(mailbox_dir "$n")" ]] || continue
-        echo "    cd $(mailbox_dir "$n") && ./mailboxctl down && ./mailboxctl up"
-    done
+    echo "  To load the allowlist (config.toml is read only at relay start):"
+    echo "    cd $RELAY_REPO && docker compose restart nostr-relay"
     echo ""
-    log "$changed registry copies $( (( CHECK )) && echo 'would change' || echo changed), $skipped avatar(s) without a mailbox"
+    log "$changed registry copies $( (( CHECK )) && echo 'would change' || echo changed), $installed component install(s)"
 }
 
 # ------------------------------------------------------------------ rotate ---
