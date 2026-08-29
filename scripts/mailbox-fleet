@@ -92,61 +92,57 @@ mailbox_dir() { printf '%s' "${DIROF[$1]}/tools/nostr-mailbox"; }
 keyed_avatars() { local n; for n in "${NAMES[@]}"; do has_key "$n" && echo "$n"; done; return 0; }
 
 # ----------------------------------------------------------------- publish ---
-publish() {
+# The address book is built ONCE per run and the same file copied out. Generating
+# it per avatar would let two copies differ if pass changed mid-run.
+build_book() { # -> path of a temp file
     local -a keyed; mapfile -t keyed < <(keyed_avatars)
     (( ${#keyed[@]} )) || die "no avatar in $FLEET_FILE has a key in pass -- mint first"
-
-    # Build the address book ONCE and copy that same file everywhere. Generating
-    # it per avatar would let two copies differ if pass changed mid-run.
-    local tmp; tmp="$(mktemp)"; trap 'rm -f "$tmp"' RETURN
+    local tmp; tmp="$(mktemp)"
     "$MAILBOX_REPO/scripts/build-registry" "${keyed[@]}" > "$tmp" || die "build-registry failed"
-    log "address book covers ${#keyed[@]} avatar(s): ${keyed[*]}"
-    echo ""
+    log "address book covers ${#keyed[@]} avatar(s): ${keyed[*]}" >&2
+    printf '%s' "$tmp"
+}
 
-    local n mdir changed=0 installed=0
-    for n in "${NAMES[@]}"; do
+give_book() { # <book> <avatar>...
+    local book="$1"; shift
+    local n mdir
+    for n in "$@"; do
         mdir="$(mailbox_dir "$n")"
-        # An avatar without the component gets it, rather than a report that it does
-        # not have it. Installing is per-avatar file copying; knowing WHICH avatars
-        # and WHERE they live is this script's job, so the two belong together --
-        # otherwise every fleet change ends in a hand-run loop.
-        if [[ ! -d "$mdir" || ! -x "$mdir/mailbox" ]]; then
-            if (( CHECK )); then
-                printf '  %-32s WOULD install the mailbox component\n' "$n"
-                installed=$((installed+1)); continue
-            fi
-            "$MAILBOX_REPO/scripts/install" "${DIROF[$n]}" --no-registry >/dev/null \
-                || { printf '  %-32s INSTALL FAILED\n' "$n"; continue; }
-            printf '  %-32s mailbox component installed\n' "$n"
-            installed=$((installed+1))
-        fi
-        if cmp -s "$tmp" "$mdir/registry.json"; then
-            printf '  %-32s registry.json already current\n' "$n"
+        if [[ ! -d "$mdir" ]]; then
+            printf '  %-32s no component here -- install first\n' "$n"
+        elif cmp -s "$book" "$mdir/registry.json"; then
+            printf '  %-32s address book already current\n' "$n"
         elif (( CHECK )); then
-            printf '  %-32s registry.json WOULD be updated\n' "$n"; changed=$((changed+1))
+            printf '  %-32s address book WOULD be updated\n' "$n"
         else
-            cp "$tmp" "$mdir/registry.json"
-            printf '  %-32s registry.json updated\n' "$n"; changed=$((changed+1))
+            cp "$book" "$mdir/registry.json"
+            printf '  %-32s address book updated\n' "$n"
         fi
     done
+}
 
-    echo ""
+sync_allowlist() {
+    local -a keyed; mapfile -t keyed < <(keyed_avatars)
     if (( CHECK )); then
-        log "--check: the relay allowlist would be synced for ${#keyed[@]} avatar(s); nothing was written"
+        log "--check: the relay allowlist would be synced for ${#keyed[@]} avatar(s); nothing written"
     else
         log "syncing the relay allowlist"
         "$RELAY_REPO/scripts/sync-allowlist" "${keyed[@]}"
+        echo ""
+        echo "  To load it (config.toml is read only at relay start):"
+        echo "    cd $RELAY_REPO && docker compose restart nostr-relay"
     fi
+}
 
-    # The relay restart is printed, never run: it briefly stops buffering for the
-    # whole fleet, which is the operator's call rather than a side effect of
-    # publishing. Nothing else needs restarting -- an avatar's mailbox is a script
-    # that reads registry.json when it runs, so a new address book is live at once.
+# publish = the whole fleet, every step. The menu does the same things per avatar.
+publish() {
+    local book; book="$(build_book)"
     echo ""
-    echo "  To load the allowlist (config.toml is read only at relay start):"
-    echo "    cd $RELAY_REPO && docker compose restart nostr-relay"
+    install_avatars ${NAMES[@]+"${NAMES[@]}"}
+    give_book "$book" ${NAMES[@]+"${NAMES[@]}"}
+    rm -f "$book"
     echo ""
-    log "$changed registry copies $( (( CHECK )) && echo 'would change' || echo changed), $installed component install(s)"
+    sync_allowlist
 }
 
 # ----------------------------------------------------------------- install ---
@@ -166,8 +162,6 @@ install_avatars() {
             printf '  %-32s INSTALL FAILED\n' "$n"; rc=1
         fi
     done
-    echo ""
-    log "the address book is handed out by 'publish' -- run it after installing"
     return $rc
 }
 
@@ -252,36 +246,21 @@ menu() {
         done
         rm -f "$tmp"
         echo ""
-        echo "    numbers (e.g. 1 3) to install/refresh those     a) all listed"
-        echo "    p) publish -- address book to every avatar + relay allowlist"
-        echo "    k) rotate keys for chosen avatars (MINTS NEW ONES)"
-        echo "    x) restart the relay      c) toggle --check      q) quit"
+        echo "    numbers (e.g. 1 3) or a) all  -- choose avatars, then what to do to them"
+        echo "    s) sync the relay allowlist   x) restart the relay"
+        echo "    c) toggle --check             q) quit"
         echo ""
-        printf "  Choice: "
+        printf "  Avatars: "
         read -r reply || return 0
         local -a sel=()
         case "$reply" in
             q|Q|"") return 0 ;;
             c|C) CHECK=$((1-CHECK)); continue ;;
+            s|S) sync_allowlist; continue ;;
             x|X) relay_restart; continue ;;
-            p|P) publish; continue ;;
-            k|K)
-                printf "  Rotate which? (numbers, and note this REPLACES their keys): "
-                read -r reply || continue
-                sel=(); local t
-                for t in $reply; do
-                    [[ "$t" =~ ^[0-9]+$ ]] && (( t >= 1 && t <= ${#NAMES[@]} )) \
-                        || { echo "  not a listed number: $t"; sel=(); break; }
-                    sel+=( "${NAMES[$((t-1))]}" )
-                done
-                (( ${#sel[@]} )) || continue
-                printf "  Type ROTATE to confirm for: %s\n  > " "${sel[*]}"
-                read -r reply || continue
-                [[ "$reply" == "ROTATE" ]] || { echo "  cancelled"; continue; }
-                ARGS=( "${sel[@]}" ); rotate; continue ;;
             a|A) sel=( ${NAMES[@]+"${NAMES[@]}"} ) ;;
             *)
-                sel=(); local tok
+                local tok
                 for tok in $reply; do
                     [[ "$tok" =~ ^[0-9]+$ ]] || { echo "  not a number: $tok"; sel=(); break; }
                     (( tok >= 1 && tok <= ${#NAMES[@]} )) || { echo "  out of range: $tok"; sel=(); break; }
@@ -289,7 +268,42 @@ menu() {
                 done ;;
         esac
         (( ${#sel[@]} )) || continue
-        install_avatars "${sel[@]}" || true
+        act_on "${sel[@]}"
+    done
+}
+
+# What to do to the chosen avatars. Separating selection from action is the point:
+# an avatar is set up, or re-synced, or rotated, on its own -- not as a side effect
+# of an operation aimed at the whole fleet.
+act_on() {
+    local -a sel=( "$@" )
+    local reply book
+    while true; do
+        echo ""
+        printf '  Selected: %s\n' "${sel[*]}"
+        echo ""
+        echo "    f) full setup -- install the component and give it the address book"
+        echo "    i) install / refresh the component only"
+        echo "    b) give the current address book only"
+        echo "    k) rotate keys (MINTS NEW ONES, and republishes the fleet)"
+        echo "    <enter>) back"
+        echo ""
+        printf "  Do what: "
+        read -r reply || return 0
+        case "$reply" in
+            ""|b*ack) return 0 ;;
+            i|I) echo ""; install_avatars "${sel[@]}" || true; return 0 ;;
+            b|B) echo ""; book="$(build_book)"; give_book "$book" "${sel[@]}"; rm -f "$book"; return 0 ;;
+            f|F) echo ""; install_avatars "${sel[@]}" || true
+                 book="$(build_book)"; give_book "$book" "${sel[@]}"; rm -f "$book"; return 0 ;;
+            k|K)
+                printf "  This REPLACES the identity of: %s\n" "${sel[*]}"
+                printf "  Every other avatar's address book changes with it. Type ROTATE: "
+                read -r reply || return 0
+                [[ "$reply" == "ROTATE" ]] || { echo "  cancelled"; return 0; }
+                ARGS=( "${sel[@]}" ); rotate; return 0 ;;
+            *) echo "  not an option: $reply" ;;
+        esac
     done
 }
 
