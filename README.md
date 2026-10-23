@@ -30,13 +30,19 @@ The client that agents run against this relay is NuNet's
 
 ## Deploy
 
-The relay runs on `omega-universe.singularitynet.dev`, deployed from this repository with two
-buttons under [Actions](https://github.com/omega-flagship/nostr-relay/actions): merging a pull
-request into `main` tags its merge commit `pr-<number>` ([Tag merged PR](https://github.com/omega-flagship/nostr-relay/actions/workflows/tag-merged-pr.yml),
-also runnable by hand with the number); [Deploy relay](https://github.com/omega-flagship/nostr-relay/actions/workflows/deploy.yml)
-→ Run workflow → `ref` = that tag ships it, and the same button with the previous tag rolls it
-back. Every run is logged on the pinned **Deploy log** issue. The mechanism, what a deploy
-changes and what the runner needs are in [#2](https://github.com/omega-flagship/nostr-relay/issues/2).
+[![deployed](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fomega-flagship%2Fnostr-relay%2Fbadges%2Fdeployed.json)](https://github.com/omega-flagship/nostr-relay/actions/workflows/deploy.yml)
+[![latest merged](https://img.shields.io/github/v/tag/omega-flagship/nostr-relay?filter=pr-*&sort=date&label=latest%20merged)](https://github.com/omega-flagship/nostr-relay/tags)
+
+The relay runs on `omega-universe.singularitynet.dev`, deployed from this repository with one
+button: merging a pull request into `main` tags its merge commit `pr-<number>`
+([Tag merged PR](https://github.com/omega-flagship/nostr-relay/actions/workflows/tag-merged-pr.yml),
+also runnable by hand with the number); then
+[Deploy relay](https://github.com/omega-flagship/nostr-relay/actions/workflows/deploy.yml)
+→ Run workflow → choose that tag under *Use workflow from* ships it, and the same button with
+the previous tag rolls it back. The badges above show the tag deployed now and the latest merged
+one; when they differ, a deploy is due. Every run is logged on the pinned **Deploy log** issue.
+The mechanism, what a deploy changes and what the runner needs are in
+[#2](https://github.com/omega-flagship/nostr-relay/issues/2).
 
 ## What it is
 
