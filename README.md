@@ -61,8 +61,9 @@ a tarball and the deployed commit cannot be recorded); permissions `contents: re
 `issues: write`. No secret. The last deployed commit is kept in `~/relay/DEPLOYED` in the
 runner user's home. The container, network and volume names come from upstream's compose
 files (`nostr-relay`, `nostr-relay-caddy`, `nostr-mailbox-net`, `nostr-mailbox-relay-db`):
-a host already running NuNet's relay under those names would be taken over, so check the
-host before the first run.
+a host already running NuNet's relay under those names would be taken over (same compose
+project name) or the deploy fails on the name clash (another project name); either way its
+database volume would be reused, so check the host before the first run.
 
 This workflow runs on dispatch only, by someone with write access to this repository, but
 it cannot keep other workflows off the runner: a pull request from a fork brings its own
