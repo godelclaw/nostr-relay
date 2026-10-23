@@ -37,9 +37,11 @@ the self-hosted runner `omega-universe`.
 **What can be deployed:** a merged pull request. When a pull request is merged into `main`,
 the workflow **Tag merged PR** (`.github/workflows/tag-merged-pr.yml`, on GitHub's runners)
 tags the merge commit `pr-<number>`. Those tags are the only refs the deploy accepts: no
-branch, no sha, so what runs on the server is always a reviewed, merged change, and the Deploy
-log reads as a list of pull requests. A `pr-*` tag is never moved or deleted (a tag ruleset
-refuses both; the setup script creates it). To tag a pull request merged before the workflow
+branch, no sha, so what runs on the server is always a merged change (reviewed, if `main`
+requires a review to merge), given the runner fence described under *What the workflow needs*,
+and the Deploy log reads as a list of pull requests. A `pr-*` tag is never moved or deleted (a
+tag ruleset on `pr-*` refuses both; the maintainer creates it during setup, outside this
+repository). To tag a pull request merged before the workflow
 existed, or the one that added it: Actions → Tag merged PR → Run workflow → `pr` = its number;
 the tag goes on its merge commit, only if it is merged into `main`. Residual: anyone with write
 access can create `pr-<number>` by hand at some older commit of `main` before the workflow does;
