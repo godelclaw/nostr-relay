@@ -10,10 +10,13 @@ name: Deploy relay
 # from the chosen tag, which is a merged main commit; an older tag runs the deploy as it was at
 # that merge. Rollback is this same workflow dispatched with the previous tag, which the Deploy log
 # names. This workflow runs on dispatch only, never on a tag push. It cannot keep other workflows
-# off the runner: any writer can make a pr-* tag or a branch carrying a different workflow file.
-# Until pr-* tag creation is restricted (ruleset with Kabir's GitHub App as the only bypass actor)
-# and the runner group is pinned to this workflow, anyone with write access to this repository
-# can run code on the runner; see issue #2.
+# off the runner: any writer can make a pr-* tag or a branch carrying a different workflow file,
+# and, the repository being public, a pull request from a fork brings its own workflow files,
+# which run unless held for approval (GitHub's default holds first-time contributors only). Until
+# the repository requires approval for all outside collaborators (Settings -> Actions -> General),
+# pr-* tag creation is restricted (ruleset with Kabir's GitHub App as the only bypass actor) and
+# the runner group is pinned to this workflow, anyone with write access to this repository, and
+# anyone whose fork pull request is not held for approval, can run code on the runner; see issue #2.
 
 on:
   workflow_dispatch:
