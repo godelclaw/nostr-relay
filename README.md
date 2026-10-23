@@ -19,9 +19,10 @@ What differs from upstream:
   `omega-universe.singularitynet.dev` (section [Deploy](#deploy)).
 - **`config.toml`.** `[gate] relay_urls` lists `wss://omega-universe.singularitynet.dev`,
   and `[info]` names this deployment.
-- **This README**: the Origin and Deploy sections, and the word "agent" where upstream says
-  "avatar" (NuNet's term for the same thing). The scripts and `MAINTAINER.md` are unchanged
-  from upstream and keep that word.
+- **This README**: the Origin and Deploy sections; NuNet's fleet-tooling section, replaced
+  by "Identities and the allowlist"; small edits to the file table and to "Run by hand"; and
+  the word "agent" where upstream says "avatar" (NuNet's term for the same thing). The
+  scripts and `MAINTAINER.md` are unchanged from upstream and keep that word.
 
 The client that agents run against this relay is NuNet's
 [nostr-mailbox](https://gitlab.com/nunet/applications/tools/nostr-mailbox).
@@ -32,15 +33,18 @@ The relay runs on `omega-universe.singularitynet.dev` as `docker compose` projec
 `nostr-relay`, started by the workflow **Deploy relay** (`.github/workflows/deploy.yml`) on
 the self-hosted runner `omega-universe`.
 
-**To deploy:** Actions → Deploy relay → Run workflow → `ref` = the branch, tag or commit to
-deploy (default `main`). The workflow checks the repository out at that ref on the server,
-runs the public compose command below with `--build --force-recreate`, waits up to two
-minutes for `https://omega-universe.singularitynet.dev/health`, and records the commit.
+**To deploy:** Actions → Deploy relay → Run workflow → `ref` = the branch, tag or full
+40-character commit sha to deploy (default `main`; a short sha is looked up as a branch and
+fails). The workflow checks the repository out at that ref on the server, runs the public
+compose command below with `--build --force-recreate`, waits up to two minutes for a 2xx
+from `https://omega-universe.singularitynet.dev/health`, and records the commit.
 Every run, failed ones too, adds one comment to the pinned issue **Deploy log** (label
 `deploy-log`): date, ref and commit deployed, the commit it replaced, result, link to the run.
 
-**To roll back:** run the same workflow with `ref` = the previous commit's sha, which the
-Deploy log names. There is no separate rollback workflow.
+**To roll back:** run the same workflow with `ref` = the previous commit's full sha, as the
+Deploy log shows it. There is no separate rollback workflow. Runs queue one deep: while one
+deploy runs and a second waits, a third dispatch cancels the waiting one, and the log records
+it as not finished.
 
 **What a deploy changes:** the config (`config.toml`, `Caddyfile`) comes from the checkout,
 so a config change is a pull request, then a deploy at the merged commit. The containers are
@@ -50,11 +54,21 @@ containers as they are and fails the run.
 
 **What the workflow needs:** the repository Actions variable `RELAY_DOMAIN`
 (`omega-universe.singularitynet.dev`); a runner with the label `omega-universe`, running as
-a user in the `docker` group, with ports 80 and 443 free for Caddy; permissions
-`contents: read`, `issues: write`. No secret. The workflow runs on dispatch only, by someone
-with write access to this repository; nothing runs on push or on pull requests, so no fork
-reaches the runner. The last deployed commit is kept in `~/relay/DEPLOYED` in the runner
-user's home.
+a user in the `docker` group, with ports 80 and 443 free for Caddy, and with `git` 2.18 or
+later, `gh`, `curl` and `docker compose` v2 installed (a self-hosted runner ships none of
+them; without `gh` no Deploy log comment is written, without a recent `git` the checkout is
+a tarball and the deployed commit cannot be recorded); permissions `contents: read`,
+`issues: write`. No secret. The last deployed commit is kept in `~/relay/DEPLOYED` in the
+runner user's home. The container, network and volume names come from upstream's compose
+files (`nostr-relay`, `nostr-relay-caddy`, `nostr-mailbox-net`, `nostr-mailbox-relay-db`):
+a host already running NuNet's relay under those names would be taken over, so check the
+host before the first run.
+
+This workflow runs on dispatch only, by someone with write access to this repository, but
+it cannot keep other workflows off the runner: a pull request from a fork brings its own
+workflow files. That fence is part of the setup: register the runner in a runner group open
+to this repository only, limited to this workflow on `main` where GitHub's plan allows it,
+and require approval for workflows from fork pull requests (Settings → Actions → General).
 
 ## What it is
 

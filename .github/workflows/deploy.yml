@@ -3,14 +3,17 @@ name: Deploy relay
 # Deploys this repository at a chosen ref to omega-universe (the self-hosted runner there),
 # checks https://$RELAY_DOMAIN/health, and logs every run as a comment on the pinned issue
 # "Deploy log" (label deploy-log). Rollback is this same workflow dispatched with the previous
-# commit's sha, which the Deploy log names. Dispatch only: nothing runs on push or on pull requests,
-# so no fork can reach the runner.
+# commit's sha, which the Deploy log names. This workflow runs on dispatch only, but it cannot keep
+# other workflows off the runner: a pull request from a fork brings its own workflow files. That
+# fence is part of the setup: register the runner in a runner group open to this repository only,
+# limited to this workflow on main where GitHub's plan allows it, and require approval for
+# workflows from fork pull requests (Settings -> Actions -> General).
 
 on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "Branch, tag or commit sha to deploy. Rollback: the previous sha from the Deploy log issue."
+        description: "Branch, tag, or the full 40-character commit sha to deploy (a short sha is looked up as a branch and fails). Rollback: the previous sha as the Deploy log issue shows it."
         required: true
         default: main
 
@@ -35,8 +38,10 @@ jobs:
           fetch-depth: 0
 
       - name: Preflight
+        id: preflight
         run: |
           set -euo pipefail
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           [ -n "$RELAY_DOMAIN" ] || { echo "::error::repository variable RELAY_DOMAIN is not set" >&2; exit 1; }
           docker --version
           docker compose version
@@ -68,16 +73,18 @@ jobs:
         id: health
         run: |
           set -euo pipefail
-          # up to 2 minutes: the first deploy on a host waits for Caddy's certificate
-          for i in $(seq 1 24); do
-            if curl -sf --max-time 10 "https://$RELAY_DOMAIN/health"; then
-              echo
-              echo "healthy after about $((i * 5))s"
-              exit 0
-            fi
+          # up to 2 minutes by the clock: the first deploy on a host waits for Caddy's certificate.
+          # Healthy means a 2xx answer; curl -f alone would also accept a redirect from something
+          # else answering on the domain.
+          end=$((SECONDS + 120))
+          while [ "$SECONDS" -lt "$end" ]; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "https://$RELAY_DOMAIN/health" || true)
+            case "$code" in
+              2??) echo "healthy (HTTP $code) after ${SECONDS}s"; exit 0 ;;
+            esac
             sleep 5
           done
-          echo "::error::https://$RELAY_DOMAIN/health did not answer within 2 minutes; containers left as they are"
+          echo "::error::https://$RELAY_DOMAIN/health did not answer 2xx within 2 minutes (last: HTTP ${code:-none}); containers left as they are"
           docker compose -p nostr-relay -f docker-compose.yml -f docker-compose.public.yml logs --tail 50
           exit 1
 
@@ -93,13 +100,16 @@ jobs:
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.preflight.outputs.sha }}
           PREVIOUS: ${{ steps.previous.outputs.sha }}
           DEPLOY: ${{ steps.deploy.outcome }}
           HEALTH: ${{ steps.health.outcome }}
         run: |
           set -euo pipefail
           run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-          sha=$(git rev-parse HEAD 2>/dev/null || echo unknown)
+          # from Preflight, not from the workspace: on a self-hosted runner a failed checkout leaves
+          # the previous run's HEAD in place
+          sha="${SHA:-unknown}"
           gh label create deploy-log --description "the relay deploy's run log" --color 0075CA --force -R "$GITHUB_REPOSITORY"
           log=$(gh issue list -R "$GITHUB_REPOSITORY" --label deploy-log --state open --json number --jq '.[0].number // empty')
           if [ -z "$log" ]; then
@@ -108,13 +118,19 @@ jobs:
             gh issue pin "$log" -R "$GITHUB_REPOSITORY" || echo "::warning::could not pin the Deploy log issue; pin it by hand"
           fi
           when=$(date -u +'%Y-%m-%d %H:%M UTC')
-          prev="${PREVIOUS:-none}"
+          # PREVIOUS is empty when checkout or Preflight failed (the step was skipped); the file still
+          # holds the last deploy, since "Mark as deployed" was skipped too
+          prev="${PREVIOUS:-$(cat "$HOME/relay/DEPLOYED" 2>/dev/null || echo none)}"
           if [ "$HEALTH" = success ]; then
             line="$when: deployed \`$sha\` (ref \`$REF\`), replacing \`$prev\`: healthy"
           elif [ "$DEPLOY" = failure ]; then
             line="$when: deploy of \`$sha\` (ref \`$REF\`) FAILED in docker compose; \`$prev\` stays the recorded deploy; see the run"
           elif [ "$HEALTH" = failure ]; then
-            line="$when: deployed \`$sha\` (ref \`$REF\`) but https://$RELAY_DOMAIN/health did not answer; containers left as they are; roll back by running the workflow with ref \`$prev\`"
+            if [ "$prev" = none ]; then
+              line="$when: deployed \`$sha\` (ref \`$REF\`) but https://$RELAY_DOMAIN/health did not answer; containers left as they are; nothing was deployed before, so deploy a fixed ref or stop the containers by hand"
+            else
+              line="$when: deployed \`$sha\` (ref \`$REF\`) but https://$RELAY_DOMAIN/health did not answer; containers left as they are; roll back by running the workflow with ref \`$prev\`"
+            fi
           else
             line="$when: run for \`$sha\` (ref \`$REF\`) did not finish (cancelled, or an earlier step failed); \`$prev\` stays the recorded deploy; see the run"
           fi

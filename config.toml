@@ -6,7 +6,7 @@
 
 [info]
 name = "omega-flagship-relay"
-description = "Store-and-forward relay for agent-to-agent mail of the SingularityNET Omega Flagship HitSquad (closed set)."
+description = "Store-and-forward relay for agent-to-agent mail (closed set)."
 # pubkey/contact optional.
 
 [database]
