@@ -39,8 +39,8 @@ button: merging a pull request into `main` tags its merge commit `pr-<number>`
 also runnable by hand with the number); then
 [Deploy relay](https://github.com/omega-flagship/nostr-relay/actions/workflows/deploy.yml)
 → Run workflow → choose that tag under *Use workflow from* ships it, and the same button with
-the previous tag rolls it back. The badges above show the tag deployed now and the latest merged
-one; when they differ, a deploy is due. Every run is logged on the pinned **Deploy log** issue.
+the previous tag rolls it back. The badges above show the tag last deployed healthy and the latest
+merged one; when they differ, a deploy is due. Every run is logged on the pinned **Deploy log** issue.
 The mechanism, what a deploy changes and what the runner needs are in
 [#2](https://github.com/omega-flagship/nostr-relay/issues/2).
 

@@ -2,23 +2,21 @@ name: Deploy relay
 
 # Deploys a merged pull request's tag (pr-<number>, made by the Tag merged PR workflow) to
 # omega-universe (the self-hosted runner there), checks https://$RELAY_DOMAIN/health, logs every
-# run as a comment on the pinned issue "Deploy log" (label deploy-log), and publishes the deployed
-# tag as a badge (deployed.json on the badges branch). The tag is chosen in the Run workflow
-# dialog under "Use workflow from" (the dropdown lists every branch and tag): only a pr-* tag
-# whose commit is on main is accepted, no branch, no sha. The workflow file therefore comes from
-# the chosen tag, which is a merged main commit. Rollback is this same workflow dispatched with
-# the previous tag, which the Deploy log names. This workflow runs on dispatch only, never on a
-# tag push. It cannot keep other workflows off the runner: a pull request from a fork brings its
-# own workflow files. That fence is part of the setup: register the runner in a runner group open
-# to this repository only, limited to this workflow on main where GitHub's plan allows it, and
-# require approval for workflows from fork pull requests (Settings -> Actions -> General).
+# run as a comment on the pinned issue "Deploy log" (label deploy-log), and, after a healthy
+# deploy, publishes the deployed tag as a badge (deployed.json on the badges branch) from a second
+# job on GitHub's runners, so no write token ever sits on the server. The tag is chosen in the Run
+# workflow dialog under "Use workflow from" (the dropdown lists every branch and tag): only a pr-*
+# tag whose commit is on main is accepted, no branch, no sha. The workflow file therefore comes
+# from the chosen tag, which is a merged main commit; an older tag runs the deploy as it was at
+# that merge. Rollback is this same workflow dispatched with the previous tag, which the Deploy log
+# names. This workflow runs on dispatch only, never on a tag push. It cannot keep other workflows
+# off the runner: any writer can make a pr-* tag or a branch carrying a different workflow file.
+# Until pr-* tag creation is restricted (ruleset with Kabir's GitHub App as the only bypass actor)
+# and the runner group is pinned to this workflow, anyone with write access to this repository
+# can run code on the runner; see issue #2.
 
 on:
   workflow_dispatch:
-
-permissions:
-  contents: write
-  issues: write
 
 concurrency:
   group: relay-deploy
@@ -27,6 +25,9 @@ concurrency:
 jobs:
   deploy:
     runs-on: [self-hosted, omega-universe]
+    permissions:
+      contents: read
+      issues: write
     env:
       RELAY_DOMAIN: ${{ vars.RELAY_DOMAIN }}
       REF: ${{ github.ref_name }}
@@ -110,33 +111,6 @@ jobs:
           echo "$REF $(git rev-parse HEAD)" > "$STATE/DEPLOYED"
           echo "DEPLOYED = $(cat "$STATE/DEPLOYED")"
 
-      - name: Publish the deployed badge
-        # deployed.json on the badges branch, in shields.io's endpoint format; the README's
-        # "deployed" badge reads it. A failure here does not undo a healthy deploy, so it only warns.
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          json=$(printf '{"schemaVersion":1,"label":"deployed","message":"%s","color":"blue","cacheSeconds":300}' "$REF")
-          b64=$(printf '%s' "$json" | base64 | tr -d '\n')
-          if gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/badges" >/dev/null 2>&1; then
-            sha=$(gh api "repos/$GITHUB_REPOSITORY/contents/deployed.json?ref=badges" --jq .sha 2>/dev/null || true)
-            if [ -n "$sha" ]; then
-              gh api -X PUT "repos/$GITHUB_REPOSITORY/contents/deployed.json" -f branch=badges -f message="deployed $REF" -f content="$b64" -f sha="$sha" >/dev/null
-            else
-              gh api -X PUT "repos/$GITHUB_REPOSITORY/contents/deployed.json" -f branch=badges -f message="deployed $REF" -f content="$b64" >/dev/null
-            fi
-          else
-            # first deploy: the badges branch is an orphan with this one file
-            blob=$(gh api -X POST "repos/$GITHUB_REPOSITORY/git/blobs" -f content="$b64" -f encoding=base64 --jq .sha)
-            tree=$(printf '{"tree":[{"path":"deployed.json","mode":"100644","type":"blob","sha":"%s"}]}' "$blob" \
-              | gh api -X POST "repos/$GITHUB_REPOSITORY/git/trees" --input - --jq .sha)
-            commit=$(gh api -X POST "repos/$GITHUB_REPOSITORY/git/commits" -f message="deployed $REF" -f tree="$tree" --jq .sha)
-            gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref=refs/heads/badges -f sha="$commit" >/dev/null
-          fi
-          echo "badge: deployed $REF"
-
       - name: Log the run
         if: always()
         env:
@@ -187,3 +161,40 @@ jobs:
             line="$when: run for $this did not finish (cancelled, or an earlier step failed); $prev stays the recorded deploy; see the run"
           fi
           gh issue comment "$log" -R "$GITHUB_REPOSITORY" --body "$line ([run]($run_url))"
+
+  badge:
+    # Runs only after a healthy deploy (the deploy job fails otherwise). On GitHub's runners with
+    # its own write token: the self-hosted job never holds one. Writes deployed.json on the badges
+    # branch, in shields.io's endpoint format; the README's "deployed" badge reads it. A failure
+    # here does not undo the deploy, so it only warns.
+    needs: deploy
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REF: ${{ github.ref_name }}
+    steps:
+      - name: Publish the deployed badge
+        run: |
+          set -euo pipefail
+          json=$(printf '{"schemaVersion":1,"label":"deployed","message":"%s","color":"blue","cacheSeconds":300}' "$REF")
+          b64=$(printf '%s' "$json" | base64 | tr -d '\n')
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/badges" >/dev/null 2>&1; then
+            # a missing file makes gh print its error JSON to stdout and exit 1, so test the exit
+            sha=$(gh api "repos/$GITHUB_REPOSITORY/contents/deployed.json?ref=badges" --jq .sha 2>/dev/null) || sha=
+            if [ -n "$sha" ]; then
+              gh api -X PUT "repos/$GITHUB_REPOSITORY/contents/deployed.json" -f branch=badges -f message="deployed $REF" -f content="$b64" -f sha="$sha" >/dev/null
+            else
+              gh api -X PUT "repos/$GITHUB_REPOSITORY/contents/deployed.json" -f branch=badges -f message="deployed $REF" -f content="$b64" >/dev/null
+            fi
+          else
+            # first deploy: the badges branch is an orphan with this one file
+            blob=$(gh api -X POST "repos/$GITHUB_REPOSITORY/git/blobs" -f content="$b64" -f encoding=base64 --jq .sha)
+            tree=$(printf '{"tree":[{"path":"deployed.json","mode":"100644","type":"blob","sha":"%s"}]}' "$blob" \
+              | gh api -X POST "repos/$GITHUB_REPOSITORY/git/trees" --input - --jq .sha)
+            commit=$(gh api -X POST "repos/$GITHUB_REPOSITORY/git/commits" -f message="deployed $REF" -f tree="$tree" --jq .sha)
+            gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref=refs/heads/badges -f sha="$commit" >/dev/null
+          fi
+          echo "badge: deployed $REF"
