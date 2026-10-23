@@ -1,21 +1,22 @@
 name: Deploy relay
 
-# Deploys this repository at a chosen ref to omega-universe (the self-hosted runner there),
-# checks https://$RELAY_DOMAIN/health, and logs every run as a comment on the pinned issue
-# "Deploy log" (label deploy-log). Rollback is this same workflow dispatched with the previous
-# commit's sha, which the Deploy log names. This workflow runs on dispatch only, but it cannot keep
-# other workflows off the runner: a pull request from a fork brings its own workflow files. That
-# fence is part of the setup: register the runner in a runner group open to this repository only,
-# limited to this workflow on main where GitHub's plan allows it, and require approval for
-# workflows from fork pull requests (Settings -> Actions -> General).
+# Deploys a merged pull request's tag (pr-<number>, made by the Tag merged PR workflow) to
+# omega-universe (the self-hosted runner there), checks https://$RELAY_DOMAIN/health, and logs
+# every run as a comment on the pinned issue "Deploy log" (label deploy-log). Only a pr-* tag
+# whose commit is on main is accepted: no branch, no sha. Rollback is this same workflow
+# dispatched with the previous tag, which the Deploy log names. This workflow runs on dispatch
+# only, never on a tag push: a pushed tag would run the workflow file from the tagged commit, not
+# this one. It cannot keep other workflows off the runner: a pull request from a fork brings its
+# own workflow files. That fence is part of the setup: register the runner in a runner group open
+# to this repository only, limited to this workflow on main where GitHub's plan allows it, and
+# require approval for workflows from fork pull requests (Settings -> Actions -> General).
 
 on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "Branch, tag, or the full 40-character commit sha to deploy (a short sha is looked up as a branch and fails). Rollback: the previous sha as the Deploy log issue shows it."
+        description: "The pr-<number> tag of a merged pull request (made by the Tag merged PR workflow). No default: name the tag. Rollback: the previous tag as the Deploy log issue shows it."
         required: true
-        default: main
 
 permissions:
   contents: read
@@ -42,10 +43,18 @@ jobs:
         run: |
           set -euo pipefail
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          # only a pr-<number> tag, and only if its commit is on main: a merged pull request
+          n=${REF#pr-}
+          case "$REF" in pr-[1-9]*) case "$n" in *[!0-9]*) n= ;; esac ;; *) n= ;; esac
+          [ -n "$n" ] || { echo "::error::ref must be a pr-<number> tag (got '$REF'); the Tag merged PR workflow makes one per merged pull request" >&2; exit 1; }
+          tagsha=$(git rev-parse -q --verify "refs/tags/$REF^{commit}" || true)
+          [ -n "$tagsha" ] || { echo "::error::no tag $REF in this repository" >&2; exit 1; }
+          [ "$tagsha" = "$(git rev-parse HEAD)" ] || { echo "::error::checkout is at $(git rev-parse HEAD), tag $REF is at $tagsha" >&2; exit 1; }
+          git merge-base --is-ancestor HEAD origin/main || { echo "::error::tag $REF's commit is not on main" >&2; exit 1; }
           [ -n "$RELAY_DOMAIN" ] || { echo "::error::repository variable RELAY_DOMAIN is not set" >&2; exit 1; }
           docker --version
           docker compose version
-          echo "ref $REF is $(git rev-parse HEAD)"
+          echo "tag $REF is $(git rev-parse HEAD), on main"
 
       - name: Record the previous state
         id: previous
@@ -53,8 +62,14 @@ jobs:
           set -euo pipefail
           state="${HOME:-$(getent passwd "$(id -u)" | cut -d: -f6)}/relay"
           mkdir -p "$state"
-          prev=$(cat "$state/DEPLOYED" 2>/dev/null || echo none)
-          echo "sha=$prev" >> "$GITHUB_OUTPUT"
+          # DEPLOYED holds "<tag> <sha>" (a one-field file from before tags holds the sha only)
+          read -r prevtag prevsha < "$state/DEPLOYED" 2>/dev/null || true
+          if [ -z "${prevtag:-}" ]; then prev=none
+          elif [ -z "${prevsha:-}" ]; then prev="\`$prevtag\`"; prevtag=
+          else prev="\`$prevtag\` (\`$prevsha\`)"
+          fi
+          echo "desc=$prev" >> "$GITHUB_OUTPUT"
+          echo "tag=${prevtag:-}" >> "$GITHUB_OUTPUT"
           echo "state=$state" >> "$GITHUB_OUTPUT"
           echo "previously deployed: $prev"
           docker compose -p nostr-relay -f docker-compose.yml -f docker-compose.public.yml ps || true
@@ -93,7 +108,7 @@ jobs:
           STATE: ${{ steps.previous.outputs.state }}
         run: |
           set -euo pipefail
-          git rev-parse HEAD > "$STATE/DEPLOYED"
+          echo "$REF $(git rev-parse HEAD)" > "$STATE/DEPLOYED"
           echo "DEPLOYED = $(cat "$STATE/DEPLOYED")"
 
       - name: Log the run
@@ -101,7 +116,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ steps.preflight.outputs.sha }}
-          PREVIOUS: ${{ steps.previous.outputs.sha }}
+          PREVIOUS: ${{ steps.previous.outputs.desc }}
+          PREVIOUS_TAG: ${{ steps.previous.outputs.tag }}
           DEPLOY: ${{ steps.deploy.outcome }}
           HEALTH: ${{ steps.health.outcome }}
         run: |
@@ -114,24 +130,34 @@ jobs:
           log=$(gh issue list -R "$GITHUB_REPOSITORY" --label deploy-log --state open --json number --jq '.[0].number // empty')
           if [ -z "$log" ]; then
             log=$(gh issue create -R "$GITHUB_REPOSITORY" --title "Deploy log" --label deploy-log \
-              --body "One comment per run of the Deploy relay workflow: date, ref and commit deployed, the commit it replaced, result, link to the run. Failed runs are logged too. To roll back, run the workflow with the previous commit's sha as the ref." | grep -oE '[0-9]+$')
+              --body "One comment per run of the Deploy relay workflow: date, tag and commit deployed, the tag it replaced, result, link to the run. Failed runs are logged too. To roll back, run the workflow with the previous tag as the ref." | grep -oE '[0-9]+$')
             gh issue pin "$log" -R "$GITHUB_REPOSITORY" || echo "::warning::could not pin the Deploy log issue; pin it by hand"
           fi
           when=$(date -u +'%Y-%m-%d %H:%M UTC')
           # PREVIOUS is empty when checkout or Preflight failed (the step was skipped); the file still
           # holds the last deploy, since "Mark as deployed" was skipped too
-          prev="${PREVIOUS:-$(cat "$HOME/relay/DEPLOYED" 2>/dev/null || echo none)}"
+          prev="$PREVIOUS"; prevtag="$PREVIOUS_TAG"
+          if [ -z "$prev" ]; then
+            read -r prevtag prevsha < "$HOME/relay/DEPLOYED" 2>/dev/null || true
+            if [ -z "${prevtag:-}" ]; then prev=none
+            elif [ -z "${prevsha:-}" ]; then prev="\`$prevtag\`"; prevtag=
+            else prev="\`$prevtag\` (\`$prevsha\`)"
+            fi
+          fi
+          this="\`$REF\` (\`$sha\`)"
           if [ "$HEALTH" = success ]; then
-            line="$when: deployed \`$sha\` (ref \`$REF\`), replacing \`$prev\`: healthy"
+            line="$when: deployed $this, replacing $prev: healthy"
           elif [ "$DEPLOY" = failure ]; then
-            line="$when: deploy of \`$sha\` (ref \`$REF\`) FAILED in docker compose; \`$prev\` stays the recorded deploy; see the run"
+            line="$when: deploy of $this FAILED in docker compose; $prev stays the recorded deploy; see the run"
           elif [ "$HEALTH" = failure ]; then
             if [ "$prev" = none ]; then
-              line="$when: deployed \`$sha\` (ref \`$REF\`) but https://$RELAY_DOMAIN/health did not answer; containers left as they are; nothing was deployed before, so deploy a fixed ref or stop the containers by hand"
+              line="$when: deployed $this but https://$RELAY_DOMAIN/health did not answer; containers left as they are; nothing was deployed before, so deploy a fixed tag or stop the containers by hand"
+            elif [ -n "$prevtag" ]; then
+              line="$when: deployed $this but https://$RELAY_DOMAIN/health did not answer; containers left as they are; roll back by running the workflow with ref \`$prevtag\`"
             else
-              line="$when: deployed \`$sha\` (ref \`$REF\`) but https://$RELAY_DOMAIN/health did not answer; containers left as they are; roll back by running the workflow with ref \`$prev\`"
+              line="$when: deployed $this but https://$RELAY_DOMAIN/health did not answer; containers left as they are; the previous deploy $prev predates tags: find its pull request's tag in this log and deploy that"
             fi
           else
-            line="$when: run for \`$sha\` (ref \`$REF\`) did not finish (cancelled, or an earlier step failed); \`$prev\` stays the recorded deploy; see the run"
+            line="$when: run for $this did not finish (cancelled, or an earlier step failed); $prev stays the recorded deploy; see the run"
           fi
           gh issue comment "$log" -R "$GITHUB_REPOSITORY" --body "$line ([run]($run_url))"
