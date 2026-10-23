@@ -30,65 +30,13 @@ The client that agents run against this relay is NuNet's
 
 ## Deploy
 
-The relay runs on `omega-universe.singularitynet.dev` as `docker compose` project
-`nostr-relay`, started by the workflow **Deploy relay** (`.github/workflows/deploy.yml`) on
-the self-hosted runner `omega-universe`.
-
-**What can be deployed:** a merged pull request. When a pull request is merged into `main`,
-the workflow **Tag merged PR** (`.github/workflows/tag-merged-pr.yml`, on GitHub's runners)
-tags the merge commit `pr-<number>`. Those tags are the only refs the deploy accepts: no
-branch, no sha, so what runs on the server is always a merged change (reviewed, if `main`
-requires a review to merge), given the runner fence described under *What the workflow needs*,
-and the Deploy log reads as a list of pull requests. A `pr-*` tag is never moved or deleted (a
-tag ruleset on `pr-*` refuses both; the maintainer creates it during setup, outside this
-repository). To tag a pull request merged before the workflow
-existed, or the one that added it: Actions → Tag merged PR → Run workflow → `pr` = its number;
-the tag goes on its merge commit, only if it is merged into `main`. Residual: anyone with write
-access can create `pr-<number>` by hand at some older commit of `main` before the workflow does;
-the deploy then ships that commit of `main`, still a merged one, and the workflow's run fails
-loudly because the tag is not where it should be.
-
-**To deploy:** Actions → Deploy relay → Run workflow → `ref` = the tag, for example `pr-12`
-(no default). The workflow checks the repository out at that tag on the server, refuses
-anything that is not a `pr-<number>` tag whose commit is on `main`, runs the public compose
-command below with `--build --force-recreate`, waits up to two minutes for a 2xx from
-`https://omega-universe.singularitynet.dev/health`, and records the tag and commit.
-Every run, failed ones too, adds one comment to the pinned issue **Deploy log** (label
-`deploy-log`): date, tag and commit deployed, the tag it replaced, result, link to the run.
-
-**To roll back:** run the same workflow with `ref` = the previous tag, as the Deploy log shows
-it. There is no separate rollback workflow. Runs queue one deep: while one deploy runs and a
-second waits, a third dispatch cancels the waiting one, and the log records it as not finished.
-
-**What a deploy changes:** the config (`config.toml`, `Caddyfile`) comes from the checkout,
-so a config change is a pull request, then a deploy at the merged commit. The containers are
-recreated on every deploy (a few seconds without the relay); the relay's database and
-Caddy's certificates live in named volumes and survive it. A failed health check leaves the
-containers as they are and fails the run.
-
-**What the workflow needs:** the repository Actions variable `RELAY_DOMAIN`
-(`omega-universe.singularitynet.dev`); a runner with the label `omega-universe`, running as
-a user in the `docker` group, with ports 80 and 443 free for Caddy, and with `git` 2.18 or
-later, `gh`, `curl` and `docker compose` v2 installed (a self-hosted runner ships none of
-them; without `gh` no Deploy log comment is written, without a recent `git` the checkout is
-a tarball and the deployed commit cannot be recorded); permissions `contents: read`,
-`issues: write`. No secret. The last deployed tag and commit are kept in `~/relay/DEPLOYED`
-in the runner user's home. The tag workflow needs nothing on the server: it runs on GitHub's
-runners with `contents: write` (to push the tag) and `pull-requests: read`; it triggers on
-`pull_request_target` so that a merged pull request from a fork is tagged too (under
-`pull_request` a fork's run has a read-only token), and it checks out `main`, never the pull
-request's code. The container, network and volume names come from upstream's compose
-files (`nostr-relay`, `nostr-relay-caddy`, `nostr-mailbox-net`, `nostr-mailbox-relay-db`):
-a host already running NuNet's relay under those names would be taken over (same compose
-project name) or the deploy fails on the name clash (another project name); either way its
-database volume would be reused, so check the host before the first run.
-
-This workflow runs on dispatch only, by someone with write access to this repository, and
-never on a tag push (a pushed tag would run the workflow file from the tagged commit, not the
-one on `main`). It cannot keep other workflows off the runner: a pull request from a fork brings its own
-workflow files. That fence is part of the setup: register the runner in a runner group open
-to this repository only, limited to this workflow on `main` where GitHub's plan allows it,
-and require approval for workflows from fork pull requests (Settings → Actions → General).
+The relay runs on `omega-universe.singularitynet.dev`, deployed from this repository with two
+buttons under [Actions](https://github.com/omega-flagship/nostr-relay/actions): merging a pull
+request into `main` tags its merge commit `pr-<number>` ([Tag merged PR](https://github.com/omega-flagship/nostr-relay/actions/workflows/tag-merged-pr.yml),
+also runnable by hand with the number); [Deploy relay](https://github.com/omega-flagship/nostr-relay/actions/workflows/deploy.yml)
+→ Run workflow → `ref` = that tag ships it, and the same button with the previous tag rolls it
+back. Every run is logged on the pinned **Deploy log** issue. The mechanism, what a deploy
+changes and what the runner needs are in [#2](https://github.com/omega-flagship/nostr-relay/issues/2).
 
 ## What it is
 
