@@ -5,8 +5,8 @@
 # [database], are kept so the file stays valid for either.)
 
 [info]
-name = "nunet-avatar-mailbox"
-description = "Internal store-and-forward relay for NuNet avatar messaging (closed set)."
+name = "omega-flagship-relay"
+description = "Store-and-forward relay for agent-to-agent mail (closed set)."
 # pubkey/contact optional.
 
 [database]
@@ -33,6 +33,7 @@ max_ws_frame_bytes = 262144
 # name local avatars use, and -- on a public deployment -- wss://<RELAY_DOMAIN>.
 relay_urls = [
   "ws://nostr-relay:8080",
+  "wss://omega-universe.singularitynet.dev",
 ]
 
 [authorization]

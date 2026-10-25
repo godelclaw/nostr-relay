@@ -1,0 +1,66 @@
+name: Tag merged PR
+
+# Tags main with pr-<number> at a pull request's merge commit when the pull request is merged.
+# The Deploy relay workflow deploys only such tags, so what runs on omega-universe is always a
+# merged pull request, and a rollback names the previous tag. Backfill (a pull request merged
+# before this workflow existed, including the one that added it): Run workflow with pr = the
+# number; the tag goes on that pull request's merge commit, only if it is merged into main.
+# Trigger is pull_request_target, not pull_request: a pull request from a fork gets a read-only
+# token under pull_request and could not push the tag. pull_request_target runs this file from
+# main and checks out main, never the pull request's code. Runs on GitHub's runners, never on the
+# self-hosted one. Nothing here runs on a tag push.
+
+on:
+  pull_request_target:
+    types: [closed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "Backfill: number of a pull request already merged into main; the tag pr-<number> goes on its merge commit"
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  tag:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR: ${{ inputs.pr || github.event.pull_request.number }}
+    steps:
+      - name: Resolve the merge commit
+        id: pr
+        run: |
+          set -euo pipefail
+          case "$PR" in ''|0*|*[!0-9]*) echo "::error::pr must be a pull request number (got '$PR')"; exit 1 ;; esac
+          read -r merged sha base < <(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq '"\(.merged) \(.merge_commit_sha) \(.base.ref)"')
+          [ "$merged" = true ] || { echo "::error::pull request #$PR is not merged"; exit 1; }
+          [ "$base" = main ] || { echo "::error::pull request #$PR was merged into $base, not main"; exit 1; }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "pull request #$PR merged into main at $sha"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Tag
+        env:
+          SHA: ${{ steps.pr.outputs.sha }}
+        run: |
+          set -euo pipefail
+          tag="pr-$PR"
+          git merge-base --is-ancestor "$SHA" origin/main || { echo "::error::$SHA is not on main"; exit 1; }
+          existing=$(git rev-parse -q --verify "refs/tags/$tag^{commit}" || true)
+          if [ -n "$existing" ]; then
+            [ "$existing" = "$SHA" ] && { echo "tag $tag is already at $SHA; nothing to do"; exit 0; }
+            echo "::error::tag $tag exists at $existing, not at $SHA; not moved (a pr-* tag is never moved or deleted; see the tag ruleset)"
+            exit 1
+          fi
+          git tag "$tag" "$SHA"
+          git push origin "refs/tags/$tag"
+          echo "tagged $tag at $SHA"
