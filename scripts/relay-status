@@ -38,24 +38,38 @@ head_() { printf '\n== %s\n' "$*"; }
 fail() { say "  !! $*"; FAILED=1; }
 
 # ---- parsers: stdin -> stdout, no docker, so they can be tested on fixtures -------------
-# config.toml -> "<hex> <name>" per allowlisted key (name = the trailing # comment, or "-")
+# config.toml -> "<hex> <name>" per allowlisted key (name = the trailing # comment, or "-").
+# Mirrors what the relay loads: the block may open and close on one line, a commented-out
+# key is not a key, hex is lowercased, duplicates count once. No {n} intervals: old mawk
+# (1.3.3) has none and would silently parse to 0 keys.
 allowlist_from_config() {
     awk '
-        /^pubkey_whitelist[[:space:]]*=[[:space:]]*\[/ { on=1; next }
-        on && /^\]/ { on=0 }
-        on && match($0, /"[0-9a-f]{64}"/) {
-            hex = substr($0, RSTART+1, 64); name = "-"
-            if (match($0, /#[[:space:]]*[^[:space:]].*$/)) {
-                name = substr($0, RSTART+1); sub(/^[[:space:]]+/, "", name); sub(/[[:space:]]+$/, "", name)
+        /^[[:space:]]*pubkey_whitelist[[:space:]]*=[[:space:]]*\[/ { on=1; sub(/^[^[]*\[/, "") }
+        !on || /^[[:space:]]*#/ { next }
+        {
+            code = $0; name = "-"
+            if ((i = index($0, "#")) > 0) {
+                code = substr($0, 1, i-1); name = substr($0, i+1)
+                sub(/^[[:space:]]+/, "", name); sub(/[[:space:]]+$/, "", name); if (name == "") name = "-"
             }
-            print hex, name
+            code = tolower(code)
+            if (match(code, /"[0-9a-f]+"/) && RLENGTH == 66) { hex = substr(code, RSTART+1, 64); if (!seen[hex]++) print hex, name }
+            if (index(code, "]")) on = 0
         }'
 }
-# relay log -> "ok <12hex>" / "refused <12hex> <why>" per sign-in attempt
+# relay log -> "ok <12hex>" / "refused <prefix> <why>" per sign-in attempt. The relay logs the
+# refused pubkey raw (up to 12 chars, "?" when absent), so junk attempts are kept, not dropped.
 signins_from_log() {
     sed -n -E \
         -e 's/^.* auth ok: ([0-9a-f]{12}).*$/ok \1/p' \
-        -e 's/^.* auth refused \(([0-9a-f?]{1,12})\): (.*)$/refused \1 \2/p'
+        -e 's/^.* auth refused \(\): (.*)$/refused (empty) \1/p' \
+        -e 's/^.* auth refused \(([^) ]{1,12})\): (.*)$/refused \1 \2/p'
+}
+# sign-in lines -> "ok <prefix> <n>" / "refused <prefix> <n> <why>", one per key and reason
+signins_summary() {
+    awk '$1=="ok" { ok[$2]++ } $1=="refused" { r=$0; sub(/^refused [^ ]+ /, "", r); ref[$2 " " r]++ }
+        END { for (k in ok) print "ok", k, ok[k]; for (k in ref) { p=k; sub(/ .*/, "", p); print "refused", p, ref[k], substr(k, length(p)+2) } }' |
+    sort -k1,1 -k3,3nr -k2,2 -k4
 }
 # relay log -> the key count the relay last loaded (config reloaded / listening on), or ""
 loaded_count_from_log() {
@@ -63,7 +77,7 @@ loaded_count_from_log() {
 }
 # <names file: "hex name"> on stdin "prefix ..." lines -> the name for a 12-hex prefix
 name_of() { # $1 = names file, $2 = hex or 12-hex prefix
-    awk -v p="$2" 'index($1, p) == 1 { print $2; found=1; exit } END { if (!found) print "(not on the allowlist)" }' "$1"
+    awk -v p="$2" 'index($1, p) == 1 { print substr($0, length($1)+2); found=1; exit } END { if (!found) print "(not on the allowlist)" }' "$1"
 }
 
 main() {
@@ -102,15 +116,14 @@ main() {
     n_loaded=$(docker logs "$RELAY" 2>&1 | loaded_count_from_log)
     say "  $n_conf key(s) in the file; relay last loaded: ${n_loaded:-unknown (no 'config reloaded' line in the log)}"
     [ -z "$n_loaded" ] || [ "$n_loaded" = "$n_conf" ] || fail "file and relay disagree: edit not picked up, or the mounted file is another one"
-    awk '{ printf "  %s  %s\n", substr($1,1,12), $2 }' "$names"
+    awk '{ printf "  %s  %s\n", substr($1,1,12), substr($0, length($1)+2) }' "$names"
 
     head_ "sign-ins, last $SINCE (relay log)"
     local log signins
     if log=$(docker logs --since "$SINCE" "$RELAY" 2>&1); then
         signins=$(printf '%s\n' "$log" | signins_from_log)
         if [ -z "$signins" ]; then say "  none"; else
-            printf '%s\n' "$signins" | awk '$1=="ok" { ok[$2]++ } $1=="refused" { ref[$2]++; why[$2]=$3 }
-                END { for (k in ok) print "ok", k, ok[k]; for (k in ref) print "refused", k, ref[k], why[k] }' | sort -k1,1 -k3,3nr |
+            printf '%s\n' "$signins" | signins_summary |
             while read -r kind pre count why; do
                 if [ "$kind" = ok ]; then say "  $pre  $(name_of "$names" "$pre")  ok x$count"
                 else say "  $pre  $(name_of "$names" "$pre")  REFUSED x$count ($why)"; fi
@@ -124,13 +137,15 @@ main() {
 import os, sqlite3, time
 db = sqlite3.connect("file:%s?mode=ro" % os.environ["DB"], uri=True)
 size = db.execute("PRAGMA page_count").fetchone()[0] * db.execute("PRAGMA page_size").fetchone()[0]
+wal = os.environ["DB"] + "-wal"
+if os.path.exists(wal): size += os.path.getsize(wal)
 total = db.execute("SELECT count(*) FROM events").fetchone()[0]
 print("total", total, size)
 for pk, n, last in db.execute("SELECT pubkey, count(*), max(created_at) FROM events GROUP BY pubkey ORDER BY 2 DESC"):
     print(pk, n, time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(last)))
 ' 2>&1); then
         printf '%s\n' "$rows" | while read -r pk n last; do
-            if [ "$pk" = total ]; then say "  $n event(s), $((last / 1024)) KiB on disk"
+            if [ "$pk" = total ]; then say "  $n event(s), $((last / 1024)) KiB on disk (main file plus WAL)"
             else say "  ${pk:0:12}  $(name_of "$names" "$pk")  $n event(s), last $last"; fi
         done
     else fail "sqlite: $rows"; fi
@@ -155,4 +170,4 @@ for pk, n, last in db.execute("SELECT pubkey, count(*), max(created_at) FROM eve
     exit "$FAILED"
 }
 
-[ "${BASH_SOURCE[0]}" = "$0" ] && main "$@"
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then main "$@"; fi
