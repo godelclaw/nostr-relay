@@ -1,8 +1,8 @@
 # Maintainer runbook — nostr-mailbox provisioning
 
 Agents never mint or hold private keys. The **operator/maintainer** mints one keypair per
-avatar, stores the private key in `pass`, and publishes the public parts to
-`registry.json`. avatar-builder wires the shared relay + network + injection. This file is
+avatar, stores the private key in `pass` and the public halves in plain files under
+`$KEYS_DIR`, and publishes the public parts to `registry.json` and the relay allowlist. avatar-builder wires the shared relay + network + injection. This file is
 the command block to run **on the host** (not by an agent).
 
 ## One command
@@ -12,13 +12,14 @@ snippets:
 
 ```sh
 cd <your-path>/applications/tools/nostr-relay
+export KEYS_DIR=<dir>   # where the public halves live; harness-core's ./fleet uses its keys/
 scripts/provision undergryd-software-engineer avatar-builder          # steps 3-5
 scripts/provision --mint undergryd-software-engineer avatar-builder   # steps 1 + 3-5
 ```
 
 It builds the address book, writes the relay allowlist, and brings the relay and
-the shared network up — reading every key from `pass`, so nothing is retyped or
-read off a screen. `--mint` is opt-in because **minting replaces an avatar's
+the shared network up — reading every public key from the files mint wrote, so
+nothing is retyped or read off a screen, and no private key is read at all. `--mint` is opt-in because **minting replaces an avatar's
 keys**, and an avatar already published then has to be republished.
 
 Step 2 (the avatar's own secret declarations) is the one part the script does not
@@ -38,18 +39,20 @@ cd <your-path>/applications/tools/nostr-mailbox
 scripts/mint-avatar-keys undergryd-software-engineer avatar-builder
 ```
 
-Per avatar it writes **four** `pass` entries — the whole identity lives in `pass`,
-nothing about it is left on a screen:
+Per avatar it writes the private key to `pass` and the two public halves, which are
+not secrets, to plain files (`KEYS_DIR` is required):
 
-| entry | what |
+| where | what |
 |---|---|
-| `nunet/avatars/<avatar>/nostr-nsec` | the private key (64-char hex; the container also accepts `nsec1…`) |
-| `nunet/avatars/<avatar>/nostr-pubkey-hex` | the public key → the relay `pubkey_whitelist` |
-| `nunet/avatars/<avatar>/nostr-npub` | the public key, bech32 → `registry.json` |
-| `nunet/avatars/<avatar>/mailbox-api-token` | the bearer token between that avatar's `mailbox` CLI and its own container |
+| pass `nunet/avatars/<avatar>/nostr-nsec` | the private key (64-char hex; the container also accepts `nsec1…`) |
+| file `$KEYS_DIR/<avatar>/nostr-pubkey-hex` | the public key → the relay `pubkey_whitelist` |
+| file `$KEYS_DIR/<avatar>/nostr-npub` | the public key, bech32 → `registry.json` |
+
+A worker clone's key is `--throwaway`: the public files as above, the private key
+handed to the caller on fd 3 and stored nowhere. `drop-avatar-keys` reverses a mint.
 
 The public parts are echoed as well, but **only for reassurance** — steps 3 and 4
-read them back out of `pass`, so there is never a reason to copy one from
+read them back from the files, so there is never a reason to copy one from
 scrollback. **The private key is never printed**: it goes container stdout →
 `pass` stdin, reaching neither screen, scrollback, nor shell history. `PASS_PREFIX`
 (default `nunet/avatars`) overrides the store layout.
@@ -125,8 +128,8 @@ undergryd-software-engineer" and so an arriving message can be logged under a na
 than a 64-character key. It is **not** a control surface: a message is trusted because its
 signature verifies.
 
-Generate it from the keys already in `pass` — no retyping, and the private halves are
-never read:
+Generate it from the public files in `$KEYS_DIR` — no retyping, and the private halves
+are never read:
 
 ```sh
 cd <your-path>/applications/tools/nostr-mailbox
@@ -145,8 +148,8 @@ swapped key fails loud instead of misdelivering silently.
 
 ## 4. Pin the pubkey in the relay allowlist
 
-`scripts/sync-allowlist` writes `pubkey_whitelist` in `config.toml` from the keys in
-`pass`, then you restart the relay (`docker compose restart` in this repo). Closed
+`scripts/sync-allowlist` writes `pubkey_whitelist` in `config.toml` from
+`$KEYS_DIR/<avatar>/nostr-pubkey-hex`, then you restart the relay (`docker compose restart` in this repo). Closed
 set = no spam/discovery problem internally.
 
 ```sh
@@ -154,8 +157,9 @@ scripts/sync-allowlist undergryd-software-engineer avatar-builder
 ```
 
 It rewrites that block in place and leaves the rest of `config.toml` alone, so it
-is safe to re-run whenever the fleet gains a member. It refuses if an avatar has
-no key in `pass` rather than writing a short list — a silently short allowlist
+is safe to re-run whenever the fleet gains a member. It refuses to drop a key already
+in the list unless `--drop <avatar>` names it, and it refuses if an avatar has
+no key file rather than writing a short list — a silently short allowlist
 locks an avatar out with a confusing error at the relay.
 
 Unlike the address book, this one **is** access control — it is what the relay enforces
