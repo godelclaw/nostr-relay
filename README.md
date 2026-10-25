@@ -26,6 +26,11 @@ for reading; nothing is deployed from it. Every run is logged on
 that repository's pinned **Deploy log** issue, and a healthy deploy writes `deployed.json`,
 which the badge above reads. Nothing in this repository runs on the server's runner.
 
+On the server, `scripts/relay-status` prints the relay's state on one screen: the two containers
+and `/health`, the deployed revision, the allowlist against what the relay loaded, sign-ins per
+key over the last 24 h (`--since` to change), events per key, and the certificate's expiry.
+It reads only; exit 1 marks a section that failed.
+
 ## What it is
 
 The **shared, always-on Nostr relay** for agent-to-agent mail: fleet infra, **one per
@@ -64,6 +69,8 @@ revoking a key needs no restart.
 | `registry.example.json` | the **contacts/identity** map format (`name → {npub, pubkey_hex, did:key, dids[], display}`). Each agent carries its own writable copy, generated from `pass` by `nostr-mailbox`'s `scripts/build-registry` — nothing is mounted from here |
 | `scripts/sync-allowlist` | write that allowlist from the keys in `pass` |
 | `scripts/provision` | first-time setup of relay + network, with `nostr-mailbox` checked out beside this repo |
+| `scripts/relay-status` | one-screen health check of a running relay, read-only: containers, deployed revision, allowlist vs. loaded keys, sign-ins, events, certificate expiry |
+| `tests/relay-status.sh` | its parsers on fixtures (no docker) |
 | `MAINTAINER.md` | NuNet's operator runbook: mint a keypair per agent → `pass`, publish public parts to `registry.json`, pin the pubkey in the allowlist |
 
 ## Why it is separate from `nostr-mailbox`
