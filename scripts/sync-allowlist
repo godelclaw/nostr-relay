@@ -13,8 +13,9 @@
 # that passes a short list -- a store missing some avatars, a typo, a fleet file
 # half-written -- would lock everyone it left out off the relay at the next
 # restart. A key already in config.toml stays unless its avatar is named with
-# --drop (reap and rotate do that). A key in the block without a "# <avatar>"
-# comment cannot be named, so it can only be removed by editing config.toml.
+# --drop (reap does that), or is listed again with a new key (a rotation: the
+# new key replaces the old). A key in the block without a "# <avatar>" comment
+# cannot be named, so it can only be removed by editing config.toml.
 #
 # Idempotent: rewrites the pubkey_whitelist block in place and leaves the rest of
 # config.toml untouched. Restart the relay afterwards to load it.
@@ -40,8 +41,9 @@ done
 [[ -f "$CONF" ]] || die "no config.toml at $CONF"
 
 block=""
-declare -A want=()
+declare -A want=() listed=()
 for avatar in "${names[@]}"; do
+    listed["$avatar"]=1
     [[ -z "${drop[$avatar]:-}" ]] || die "'$avatar' is both listed and dropped"
     hex=""
     [[ -s "$KEYS_DIR/$avatar/nostr-pubkey-hex" ]] && hex="$(head -1 "$KEYS_DIR/$avatar/nostr-pubkey-hex")"
@@ -55,6 +57,7 @@ lost=()
 while read -r hex who; do
     [[ -n "${want[$hex]:-}" ]] && continue
     [[ -n "$who" && -n "${drop[$who]:-}" ]] && continue
+    [[ -n "$who" && -n "${listed[$who]:-}" ]] && continue   # rotated: replaced, not dropped
     lost+=( "${who:-<no comment> $hex}" )
 done < <(awk '
     /^pubkey_whitelist[[:space:]]*=[[:space:]]*\[/ { inb=1; next }

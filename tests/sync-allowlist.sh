@@ -44,6 +44,12 @@ check "  beta is gone"                      1 "$(grep -q "$B" "$T/config.toml"; 
 check "listed and dropped: refused"         1 "$(run --drop alpha alpha)"
 
 fixture
+key beta "$D"
+check "a rotated key (same name, new key): written" 0 "$(run alpha beta)"
+check "  the new key replaced the old"      0 "$(grep -qx "  \"$D\",  # beta" "$T/config.toml" && ! grep -q "$B" "$T/config.toml"; echo $?)"
+key beta "$B"
+
+fixture
 sed -i "s/  # beta//" "$T/config.toml"
 check "an uncommented key cannot be dropped by name" 1 "$(run --drop beta alpha)"
 
