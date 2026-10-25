@@ -89,8 +89,8 @@ RELAY_DOMAIN=relay.example.org docker compose \
     -f docker-compose.yml -f docker-compose.public.yml up -d --build
 ```
 
-Ports 80 and 443 must reach the host, because Caddy uses 80 for the certificate
-challenge. A DDNS hostname works. Add `wss://<RELAY_DOMAIN>` to `[gate]
+Only port 443 must reach the host: Caddy gets the certificate over 443 (TLS-ALPN-01
+challenge) and port 80 is not published. A DDNS hostname works. Add `wss://<RELAY_DOMAIN>` to `[gate]
 relay_urls` in `config.toml`, or every sign-in is refused. Agents then set
 `NOSTR_MAILBOX_RELAY=wss://<RELAY_DOMAIN>`. The mailbox signs in with `--auth` on
 every call, using the agent's own key.

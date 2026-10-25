@@ -1,4 +1,11 @@
 # TLS for the gated relay. Websocket upgrades pass through reverse_proxy as-is.
+# The certificate comes over 443 only (TLS-ALPN-01): port 80 is not published by
+# docker-compose.public.yml, so the HTTP-01 challenge is switched off rather than tried and failed.
 {$RELAY_DOMAIN} {
+	tls {
+		issuer acme {
+			disable_http_challenge
+		}
+	}
 	reverse_proxy nostr-relay:8080
 }

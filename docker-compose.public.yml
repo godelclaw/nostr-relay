@@ -3,8 +3,9 @@
 #   RELAY_DOMAIN=relay.example.org docker compose \
 #       -f docker-compose.yml -f docker-compose.public.yml up -d --build
 #
-# Caddy obtains and renews the certificate itself (ports 80 and 443 must reach this
-# host -- the HTTP-01 challenge needs 80). A DDNS hostname works like any other.
+# Caddy obtains and renews the certificate itself over 443 alone (TLS-ALPN-01 challenge,
+# see the Caddyfile); port 80 is not published, so nothing on the host answers plain HTTP.
+# A DDNS hostname works like any other.
 # Avatars then use  NOSTR_MAILBOX_RELAY=wss://$RELAY_DOMAIN , and config.toml's
 # [gate] relay_urls must list that URL, or every sign-in is refused.
 services:
@@ -12,7 +13,7 @@ services:
     image: caddy:2.8.4
     container_name: nostr-relay-caddy
     restart: unless-stopped
-    ports: ["80:80", "443:443"]
+    ports: ["443:443"]
     environment:
       RELAY_DOMAIN: ${RELAY_DOMAIN:?set RELAY_DOMAIN to the relay's public hostname}
     volumes:
