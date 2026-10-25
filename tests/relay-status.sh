@@ -63,33 +63,36 @@ check "allowlist: repo config.toml, every key named" \
 
 LOG="2026-10-25 20:00:01,123 INFO listening on 0.0.0.0:8080, 3 key(s) on the allowlist
 2026-10-25 20:00:05,000 INFO auth ok: ${A:0:12}
-2026-10-25 20:00:06,000 INFO auth refused (${C:0:12}): not on the allowlist
-2026-10-25 20:00:07,000 INFO auth refused (?): malformed AUTH event
-2026-10-25 20:00:08,000 INFO auth refused (): malformed AUTH event
-2026-10-25 20:00:09,000 INFO auth refused (ZZ!): malformed AUTH event
-2026-10-25 20:00:10,000 INFO auth refused (${C:0:12}): AUTH event too old or in the future
-2026-10-25 20:00:11,000 INFO auth refused (${C:0:12}): not on the allowlist
+2026-10-25 20:00:06,000 INFO auth refused (${C:0:12}): restricted: this key is not on the allowlist
+2026-10-25 20:00:07,000 INFO auth refused (?): invalid: not an AUTH event
+2026-10-25 20:00:08,000 INFO auth refused (): invalid: id, pubkey or sig malformed
+2026-10-25 20:00:09,000 INFO auth refused (0): invalid: id, pubkey or sig malformed
+2026-10-25 20:00:09,500 INFO auth refused ($(printf '\033')[2J$(printf '\033')[H): invalid: id, pubkey or sig malformed
+2026-10-25 20:00:09,700 INFO auth refused (a)b): invalid: id, pubkey or sig malformed
+2026-10-25 20:00:10,000 INFO auth refused (${C:0:12}): invalid: AUTH event too old or in the future
+2026-10-25 20:00:11,000 INFO auth refused (${C:0:12}): restricted: this key is not on the allowlist
 2026-10-25 20:01:00,000 INFO config reloaded: 4 key(s) on the allowlist
 2026-10-25 20:02:00,000 INFO auth ok: ${B:0:12}
 2026-10-25 20:02:01,000 INFO deletion by ${A:0:12}: 1 event(s) removed"
-check "sign-ins: ok and refused with the reason, nothing else" \
+check "sign-ins: ok and refused with the whole reason; any prefix but 12 hex or ? is (malformed)" \
     "ok ${A:0:12}
-refused ${C:0:12} not on the allowlist
-refused ? malformed AUTH event
-refused (empty) malformed AUTH event
-refused ZZ! malformed AUTH event
-refused ${C:0:12} AUTH event too old or in the future
-refused ${C:0:12} not on the allowlist
+refused ${C:0:12} restricted: this key is not on the allowlist
+refused ? invalid: not an AUTH event
+refused (malformed) invalid: id, pubkey or sig malformed
+refused (malformed) invalid: id, pubkey or sig malformed
+refused (malformed) invalid: id, pubkey or sig malformed
+refused (malformed) invalid: id, pubkey or sig malformed
+refused ${C:0:12} invalid: AUTH event too old or in the future
+refused ${C:0:12} restricted: this key is not on the allowlist
 ok ${B:0:12}" \
     "$(printf '%s\n' "$LOG" | signins_from_log)"
 check "summary: counted per key and whole reason, ok first, most frequent first, then by key" \
     "ok ${A:0:12} 1
 ok ${B:0:12} 1
-refused ${C:0:12} 2 not on the allowlist
-refused (empty) 1 malformed AUTH event
-refused ? 1 malformed AUTH event
-refused ZZ! 1 malformed AUTH event
-refused ${C:0:12} 1 AUTH event too old or in the future" \
+refused (malformed) 4 invalid: id, pubkey or sig malformed
+refused ${C:0:12} 2 restricted: this key is not on the allowlist
+refused ? 1 invalid: not an AUTH event
+refused ${C:0:12} 1 invalid: AUTH event too old or in the future" \
     "$(printf '%s\n' "$LOG" | signins_from_log | signins_summary)"
 check "loaded count: the last reload wins over the start line" "4" "$(printf '%s\n' "$LOG" | loaded_count_from_log)"
 check "loaded count: start line alone" "3" "$(printf '%s\n' "$LOG" | head -1 | loaded_count_from_log)"
@@ -100,6 +103,7 @@ check "name_of: 12-hex prefix" "beta-two" "$(name_of "$T/names" "${B:0:12}")"
 check "name_of: full hex" "alpha" "$(name_of "$T/names" "$A")"
 check "name_of: unknown key" "(not on the allowlist)" "$(name_of "$T/names" "deadbeefdead")"
 check "name_of: '?' from a malformed AUTH" "(not on the allowlist)" "$(name_of "$T/names" "?")"
+check "name_of: a short hex prefix never matches a key" "(not on the allowlist)" "$(name_of "$T/names" "${A:0:1}")"
 allowlist_from_config < "$T/edges.toml" > "$T/names2"
 check "name_of: a name with spaces, whole" "Charlie Three" "$(name_of "$T/names2" "${C:0:12}")"
 

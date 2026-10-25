@@ -58,12 +58,15 @@ allowlist_from_config() {
         }'
 }
 # relay log -> "ok <12hex>" / "refused <prefix> <why>" per sign-in attempt. The relay logs the
-# refused pubkey raw (up to 12 chars, "?" when absent), so junk attempts are kept, not dropped.
+# refused pubkey raw (whatever the client sent, cut to 12 chars; "?" when absent): only a 12-hex
+# prefix or "?" passes through, anything else is printed as "(malformed)" so no outside bytes
+# reach the terminal and no short junk is matched to a real key. Every auth reason starts with
+# "invalid:" or "restricted:", so junk attempts are still counted, not dropped.
 signins_from_log() {
     sed -n -E \
         -e 's/^.* auth ok: ([0-9a-f]{12}).*$/ok \1/p' \
-        -e 's/^.* auth refused \(\): (.*)$/refused (empty) \1/p' \
-        -e 's/^.* auth refused \(([^) ]{1,12})\): (.*)$/refused \1 \2/p'
+        -e 's/^.* auth refused \(([0-9a-f]{12}|\?)\): (.*)$/refused \1 \2/p' \
+        -e 's/^.* auth refused \(.*\): ((invalid|restricted): .*)$/refused (malformed) \1/p'
 }
 # sign-in lines -> "ok <prefix> <n>" / "refused <prefix> <n> <why>", one per key and reason
 signins_summary() {
@@ -76,8 +79,8 @@ loaded_count_from_log() {
     sed -n -E -e 's/^.*(config reloaded:|listening on [^,]*,) ?([0-9]+) key\(s\).*$/\2/p' | tail -1
 }
 # <names file: "hex name"> on stdin "prefix ..." lines -> the name for a 12-hex prefix
-name_of() { # $1 = names file, $2 = hex or 12-hex prefix
-    awk -v p="$2" 'index($1, p) == 1 { print substr($0, length($1)+2); found=1; exit } END { if (!found) print "(not on the allowlist)" }' "$1"
+name_of() { # $1 = names file, $2 = hex or 12-hex prefix; shorter prefixes never match
+    awk -v p="$2" 'length(p) >= 12 && index($1, p) == 1 { print substr($0, length($1)+2); found=1; exit } END { if (!found) print "(not on the allowlist)" }' "$1"
 }
 
 main() {
