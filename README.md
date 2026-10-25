@@ -1,48 +1,30 @@
 # nostr-relay
 
-## Origin
+## Where this lives
 
-This repository is a **copy** of NuNet's
-[nunet/applications/tools/nostr-relay](https://gitlab.com/nunet/applications/tools/nostr-relay),
-taken on 2026-10-23 at commit
-[`4196232`](https://gitlab.com/nunet/applications/tools/nostr-relay/-/commit/4196232862d229659083e43e54ec17276e7b05ba)
-with its full history. The relay was written at NuNet for its agent fleet; the authors of
-record in the history are `kabir@nunet.io` and NuNet's GitLab service account.
+The source is this GitLab project, and `main` moves only by merge request here. It is mirrored
+to [github.com/nunet/nostr-relay](https://github.com/nunet/nostr-relay) (push mirror, GitLab →
+GitHub); pull requests are welcome there and are merged on GitLab, after which the mirror
+closes them as merged. Operated for the SingularityNET Omega Flagship HitSquad on
+`omega-universe.singularitynet.dev` (section [Deploy](#deploy)); the relay was written at NuNet
+for its agent fleet.
 
-It is **not a mirror**: nothing syncs. Changes here are the SingularityNET Omega Flagship
-HitSquad's, made by pull request. Changes from upstream come in by `git fetch upstream` and
-a pull request, when wanted.
-
-What differs from upstream:
-
-- **The Omega deployment.** `.github/workflows/tag-merged-pr.yml` tags every merged pull
-  request `pr-<number>`; `.github/workflows/deploy.yml` deploys such a tag to
-  `omega-universe.singularitynet.dev` (section [Deploy](#deploy)).
-- **`config.toml`.** `[gate] relay_urls` lists `wss://omega-universe.singularitynet.dev`,
-  and `[info]` names this deployment.
-- **This README**: the Origin and Deploy sections; NuNet's fleet-tooling section, replaced
-  by "Identities and the allowlist"; small edits to the file table and to "Run by hand"; and
-  the word "agent" where upstream says "avatar" (NuNet's term for the same thing). The
-  scripts and `MAINTAINER.md` are unchanged from upstream and keep that word.
-
-The client that agents run against this relay is NuNet's
+The client that agents run against this relay is
 [nostr-mailbox](https://gitlab.com/nunet/applications/tools/nostr-mailbox).
 
 ## Deploy
 
-[![deployed](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fomega-flagship%2Fnostr-relay%2Fbadges%2Fdeployed.json)](https://github.com/omega-flagship/nostr-relay/actions/workflows/deploy.yml)
-[![latest merged](https://img.shields.io/github/v/tag/omega-flagship/nostr-relay?filter=pr-*&sort=date&label=latest%20merged)](https://github.com/omega-flagship/nostr-relay/tags)
+[![deployed](https://img.shields.io/endpoint?url=https%3A%2F%2Fomega-universe.singularitynet.dev%2Fdeployed.json)](https://omega-universe.singularitynet.dev/deployed.json)
+[![latest merged](https://img.shields.io/github/v/tag/nunet/nostr-relay?filter=pr-*&sort=date&label=latest%20merged)](https://github.com/nunet/nostr-relay/tags)
 
-The relay runs on `omega-universe.singularitynet.dev`, deployed from this repository with one
-button: merging a pull request into `main` tags its merge commit `pr-<number>`
-([Tag merged PR](https://github.com/omega-flagship/nostr-relay/actions/workflows/tag-merged-pr.yml),
-also runnable by hand with the number); then
-[Deploy relay](https://github.com/omega-flagship/nostr-relay/actions/workflows/deploy.yml)
-→ Run workflow → type that tag as the ref ships it, and the same button with the previous tag
-rolls it back. The badges above show the tag last deployed healthy and the latest
-merged one; when they differ, a deploy is due. Every run is logged on the pinned **Deploy log** issue.
-The mechanism, what a deploy changes and what the runner needs are in
-[#2](https://github.com/omega-flagship/nostr-relay/issues/2).
+The relay runs on `omega-universe.singularitynet.dev`. Merging a pull request tags its merge
+commit `pr-<number>` on GitHub ([Tag merged PR](https://github.com/nunet/nostr-relay/actions/workflows/tag-merged-pr.yml),
+also runnable by hand with the number). The deploy itself runs from the HitSquad's private
+`omega-flagship/.github-private` repository: its **Deploy** workflow takes `repo = nostr-relay`
+and such a tag, checks the repository out at the tag on the server, runs the compose files and
+checks `/health`; the same workflow with the previous tag rolls back. Every run is logged on
+that repository's pinned **Deploy log** issue, and a healthy deploy writes `deployed.json`,
+which the badge above reads. Nothing in this repository runs on the server's runner.
 
 ## What it is
 
@@ -74,7 +56,6 @@ revoking a key needs no restart.
 | file | what |
 |---|---|
 | `.github/workflows/tag-merged-pr.yml` | tags each merged pull request `pr-<number>` (section [Deploy](#deploy)); not in upstream |
-| `.github/workflows/deploy.yml` | the Omega deployment of such a tag (section [Deploy](#deploy)); not in upstream |
 | `relay/` | gated-relay: `gated_relay.py`, its pinned `requirements.txt`, the `Dockerfile` |
 | `docker-compose.yml` | builds and runs it, creates the shared `nostr-mailbox-net` network + a persistent DB volume |
 | `docker-compose.public.yml`, `Caddyfile` | the public deployment: the same relay behind Caddy, TLS on `$RELAY_DOMAIN` |
