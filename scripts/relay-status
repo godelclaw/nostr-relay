@@ -1,0 +1,158 @@
+#!/usr/bin/env bash
+# One-screen health check for a RUNNING relay. Read-only; runs on the host beside the
+# compose files, as the user that runs docker.
+#
+#   scripts/relay-status [--since 24h] [--config config.toml]
+#
+# Prints: the two containers and /health; the revision the deploy last marked healthy
+# (deployed.json); the allowlist from config.toml, with names, against the count the
+# relay last loaded; sign-ins per key over --since (from the relay's log); events per
+# key and the database size (from the relay's SQLite); and the TLS certificate's expiry
+# on RELAY_DOMAIN (from the environment, else from the caddy container).
+#
+# Nothing here changes the relay: docker ps / logs / exec with read-only commands, and
+# an openssl handshake. Each section fails on its own with a line saying why, and the
+# rest still prints. Exit status is 1 if any section failed, 0 otherwise.
+set -uo pipefail
+
+HERE="$(cd "$(dirname "$0")/.." && pwd)"
+SINCE="24h"
+CONF="$HERE/config.toml"
+RELAY="${RELAY_CONTAINER:-nostr-relay}"
+CADDY="${CADDY_CONTAINER:-nostr-relay-caddy}"
+DB="${RELAY_DB:-/usr/src/app/db/gated-relay.sqlite3}"
+FAILED=0
+
+usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --since)  SINCE="${2:?--since needs a docker duration, e.g. 24h}"; shift 2 ;;
+        --config) CONF="${2:?--config needs a path}"; shift 2 ;;
+        -h|--help) usage 0 ;;
+        *) echo "relay-status: unknown argument $1" >&2; usage 2 ;;
+    esac
+done
+
+say()  { printf '%s\n' "$*"; }
+head_() { printf '\n== %s\n' "$*"; }
+fail() { say "  !! $*"; FAILED=1; }
+
+# ---- parsers: stdin -> stdout, no docker, so they can be tested on fixtures -------------
+# config.toml -> "<hex> <name>" per allowlisted key (name = the trailing # comment, or "-")
+allowlist_from_config() {
+    awk '
+        /^pubkey_whitelist[[:space:]]*=[[:space:]]*\[/ { on=1; next }
+        on && /^\]/ { on=0 }
+        on && match($0, /"[0-9a-f]{64}"/) {
+            hex = substr($0, RSTART+1, 64); name = "-"
+            if (match($0, /#[[:space:]]*[^[:space:]].*$/)) {
+                name = substr($0, RSTART+1); sub(/^[[:space:]]+/, "", name); sub(/[[:space:]]+$/, "", name)
+            }
+            print hex, name
+        }'
+}
+# relay log -> "ok <12hex>" / "refused <12hex> <why>" per sign-in attempt
+signins_from_log() {
+    sed -n -E \
+        -e 's/^.* auth ok: ([0-9a-f]{12}).*$/ok \1/p' \
+        -e 's/^.* auth refused \(([0-9a-f?]{1,12})\): (.*)$/refused \1 \2/p'
+}
+# relay log -> the key count the relay last loaded (config reloaded / listening on), or ""
+loaded_count_from_log() {
+    sed -n -E -e 's/^.*(config reloaded:|listening on [^,]*,) ?([0-9]+) key\(s\).*$/\2/p' | tail -1
+}
+# <names file: "hex name"> on stdin "prefix ..." lines -> the name for a 12-hex prefix
+name_of() { # $1 = names file, $2 = hex or 12-hex prefix
+    awk -v p="$2" 'index($1, p) == 1 { print $2; found=1; exit } END { if (!found) print "(not on the allowlist)" }' "$1"
+}
+
+main() {
+    command -v docker >/dev/null || { echo "relay-status: docker not found; run this on the relay host" >&2; exit 1; }
+    [ -f "$CONF" ] || { echo "relay-status: no config.toml at $CONF (--config)" >&2; exit 1; }
+    local names; names=$(mktemp); trap 'rm -f "$names"' EXIT
+    allowlist_from_config < "$CONF" > "$names"
+
+    say "relay-status  $(date -u +%Y-%m-%dT%H:%M:%SZ)  host $(hostname)  config $CONF"
+
+    head_ "containers"
+    local c
+    for c in "$RELAY" "$CADDY"; do
+        local line
+        line=$(docker ps -a --filter "name=^${c}\$" --format '{{.Status}}  image {{.Image}}' 2>/dev/null)
+        if [ -z "$line" ]; then fail "$c: no such container"
+        elif [[ "$line" != Up* ]]; then fail "$c: $line"
+        else say "  $c: $line"; fi
+    done
+    local h
+    if h=$(docker exec "$RELAY" python -I -c 'import urllib.request,sys; sys.stdout.write(urllib.request.urlopen("http://127.0.0.1:8080/health", timeout=5).read().decode())' 2>&1); then
+        say "  /health (inside $RELAY): ${h%$'\n'}"
+    else fail "/health: $h"; fi
+
+    head_ "deployed (what the deploy last marked healthy)"
+    local dj
+    if dj=$(docker exec "$CADDY" cat /srv/deploy/deployed.json 2>&1); then
+        if command -v jq >/dev/null && printf '%s' "$dj" | jq -e . >/dev/null 2>&1; then
+            say "  $(printf '%s' "$dj" | jq -r '[.message // empty, .label // empty] | join("  ")')"
+        else say "  $dj"; fi
+    else fail "deployed.json: $dj"; fi
+
+    head_ "allowlist ($CONF)"
+    local n_conf n_loaded
+    n_conf=$(wc -l < "$names")
+    n_loaded=$(docker logs "$RELAY" 2>&1 | loaded_count_from_log)
+    say "  $n_conf key(s) in the file; relay last loaded: ${n_loaded:-unknown (no 'config reloaded' line in the log)}"
+    [ -z "$n_loaded" ] || [ "$n_loaded" = "$n_conf" ] || fail "file and relay disagree: edit not picked up, or the mounted file is another one"
+    awk '{ printf "  %s  %s\n", substr($1,1,12), $2 }' "$names"
+
+    head_ "sign-ins, last $SINCE (relay log)"
+    local log signins
+    if log=$(docker logs --since "$SINCE" "$RELAY" 2>&1); then
+        signins=$(printf '%s\n' "$log" | signins_from_log)
+        if [ -z "$signins" ]; then say "  none"; else
+            printf '%s\n' "$signins" | awk '$1=="ok" { ok[$2]++ } $1=="refused" { ref[$2]++; why[$2]=$3 }
+                END { for (k in ok) print "ok", k, ok[k]; for (k in ref) print "refused", k, ref[k], why[k] }' | sort -k1,1 -k3,3nr |
+            while read -r kind pre count why; do
+                if [ "$kind" = ok ]; then say "  $pre  $(name_of "$names" "$pre")  ok x$count"
+                else say "  $pre  $(name_of "$names" "$pre")  REFUSED x$count ($why)"; fi
+            done
+        fi
+    else fail "docker logs: $log"; fi
+
+    head_ "events (relay database $DB)"
+    local rows
+    if rows=$(docker exec -e DB="$DB" "$RELAY" python -I -c '
+import os, sqlite3, time
+db = sqlite3.connect("file:%s?mode=ro" % os.environ["DB"], uri=True)
+size = db.execute("PRAGMA page_count").fetchone()[0] * db.execute("PRAGMA page_size").fetchone()[0]
+total = db.execute("SELECT count(*) FROM events").fetchone()[0]
+print("total", total, size)
+for pk, n, last in db.execute("SELECT pubkey, count(*), max(created_at) FROM events GROUP BY pubkey ORDER BY 2 DESC"):
+    print(pk, n, time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(last)))
+' 2>&1); then
+        printf '%s\n' "$rows" | while read -r pk n last; do
+            if [ "$pk" = total ]; then say "  $n event(s), $((last / 1024)) KiB on disk"
+            else say "  ${pk:0:12}  $(name_of "$names" "$pk")  $n event(s), last $last"; fi
+        done
+    else fail "sqlite: $rows"; fi
+
+    head_ "certificate"
+    local domain="${RELAY_DOMAIN:-}"
+    [ -n "$domain" ] || domain=$(docker inspect "$CADDY" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | sed -n 's/^RELAY_DOMAIN=//p')
+    if [ -z "$domain" ]; then say "  RELAY_DOMAIN unset and not in $CADDY: skipped (local deployment, no TLS)"
+    elif ! command -v openssl >/dev/null; then fail "openssl not found; cannot read the certificate on $domain"
+    else
+        local end end_s
+        end=$(timeout 15 openssl s_client -connect "$domain:443" -servername "$domain" </dev/null 2>/dev/null | openssl x509 -noout -enddate 2>/dev/null | sed 's/^notAfter=//')
+        if [ -n "$end" ] && end_s=$(date -d "$end" +%s 2>/dev/null); then
+            local left=$(( (end_s - $(date +%s)) / 86400 ))
+            say "  $domain: expires $end ($left day(s) left)"
+            [ "$left" -ge 7 ] || fail "under 7 days left: Caddy renews at 30 days, so renewal is failing"
+        else fail "no certificate read from $domain:443"; fi
+    fi
+
+    say ""
+    [ "$FAILED" = 0 ] && say "all sections ok" || say "one or more sections failed (!! above)"
+    exit "$FAILED"
+}
+
+[ "${BASH_SOURCE[0]}" = "$0" ] && main "$@"
