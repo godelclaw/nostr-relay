@@ -7,5 +7,13 @@
 			disable_http_challenge
 		}
 	}
-	reverse_proxy nostr-relay:8080
+	# deployed.json: what the deploy workflow last marked healthy (shields.io endpoint JSON, read by
+	# the README badge). Written by the deploy into the directory mounted at /srv/deploy.
+	handle /deployed.json {
+		root * /srv/deploy
+		file_server
+	}
+	handle {
+		reverse_proxy nostr-relay:8080
+	}
 }
