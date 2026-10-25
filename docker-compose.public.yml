@@ -19,6 +19,8 @@ services:
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
+      # the deploy workflow's state directory (deployed.json); DEPLOY_STATE_DIR is exported by the deploy
+      - ${DEPLOY_STATE_DIR:-./deploy-state}:/srv/deploy:ro
     networks: [relay]
     depends_on: [nostr-relay]
 
