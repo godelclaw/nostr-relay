@@ -15,14 +15,14 @@ The client that agents run against this relay is
 ## Deploy
 
 [![deployed](https://img.shields.io/endpoint?url=https%3A%2F%2Fomega-universe.singularitynet.dev%2Fdeployed.json)](https://omega-universe.singularitynet.dev/deployed.json)
-[![latest merged](https://img.shields.io/github/v/tag/nunet/nostr-relay?filter=pr-*&sort=date&label=latest%20merged)](https://github.com/nunet/nostr-relay/tags)
 
-The relay runs on `omega-universe.singularitynet.dev`. Merging a pull request tags its merge
-commit `pr-<number>` on GitHub ([Tag merged PR](https://github.com/nunet/nostr-relay/actions/workflows/tag-merged-pr.yml),
-also runnable by hand with the number). The deploy itself runs from the HitSquad's private
-`omega-flagship/.github-private` repository: its **Deploy** workflow takes `repo = nostr-relay`
-and such a tag, checks the repository out at the tag on the server, runs the compose files and
-checks `/health`; the same workflow with the previous tag rolls back. Every run is logged on
+The relay runs on `omega-universe.singularitynet.dev`. A change is deployable once its merge
+request is merged here; it is named by that number, `mr-<number>`. The deploy itself runs from the
+HitSquad's private `omega-flagship/.github-private` repository: its **Deploy** workflow takes
+`repo = nostr-relay` and `mr-<number>`, reads the merge request's merge commit from GitLab's public
+API, clones this repository at that commit on the server, runs the compose files and checks
+`/health`; the same workflow with the previous number rolls back. The GitHub mirror is a copy
+for reading; nothing is deployed from it. Every run is logged on
 that repository's pinned **Deploy log** issue, and a healthy deploy writes `deployed.json`,
 which the badge above reads. Nothing in this repository runs on the server's runner.
 
@@ -55,7 +55,7 @@ revoking a key needs no restart.
 
 | file | what |
 |---|---|
-| `.github/workflows/tag-merged-pr.yml` | tags each merged pull request `pr-<number>` (section [Deploy](#deploy)); not in upstream |
+| `.github/workflows/tag-merged-pr.yml` | tags a pull request merged on GitHub `pr-<number>`; unused since the source moved here (section [Deploy](#deploy)); not in upstream |
 | `relay/` | gated-relay: `gated_relay.py`, its pinned `requirements.txt`, the `Dockerfile` |
 | `docker-compose.yml` | builds and runs it, creates the shared `nostr-mailbox-net` network + a persistent DB volume |
 | `docker-compose.public.yml`, `Caddyfile` | the public deployment: the same relay behind Caddy, TLS on `$RELAY_DOMAIN` |
