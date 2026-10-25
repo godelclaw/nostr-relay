@@ -1,29 +1,70 @@
 #!/usr/bin/env bash
-# Write the relay's pubkey_whitelist from the keys already in pass.
+# Write the relay's pubkey_whitelist from the public keys in the keys directory.
 #
-#   scripts/sync-allowlist <avatar> [avatar...]
+#   KEYS_DIR=<dir> scripts/sync-allowlist [--drop <avatar>]... <avatar> [avatar...]
 #
 # The allowlist IS access control -- the relay enforces it before accepting an
 # event -- so it lives here, with the relay that reads it. The keys come from
-# pass, never from a screen or shell history: mint-avatar-keys stored the public
-# halves there precisely so nothing has to be retyped.
+# $KEYS_DIR/<avatar>/nostr-pubkey-hex, never from a screen or shell history:
+# mint-avatar-keys (nostr-mailbox) writes the public halves there precisely so
+# nothing has to be retyped. They are public, so reading them needs no gpg.
+#
+# It REFUSES to drop a key. The new block replaces the old one whole, so a caller
+# that passes a short list -- a store missing some avatars, a typo, a fleet file
+# half-written -- would lock everyone it left out off the relay at the next
+# restart. A key already in config.toml stays unless its avatar is named with
+# --drop (reap and rotate do that). A key in the block without a "# <avatar>"
+# comment cannot be named, so it can only be removed by editing config.toml.
 #
 # Idempotent: rewrites the pubkey_whitelist block in place and leaves the rest of
 # config.toml untouched. Restart the relay afterwards to load it.
 set -euo pipefail
 
-PASS_PREFIX="${PASS_PREFIX:-nunet/avatars}"
 CONF="${CONF:-$(cd "$(dirname "$0")/.." && pwd)/config.toml}"
+die() { echo "sync-allowlist: $*" >&2; exit 1; }
 
-[ $# -gt 0 ] || { echo "usage: $(basename "$0") <avatar> [avatar...]" >&2; exit 2; }
-[ -f "$CONF" ] || { echo "sync-allowlist: no config.toml at $CONF" >&2; exit 1; }
+declare -A drop=()
+declare -a names=()
+while (( $# )); do
+    case "$1" in
+        --drop) shift; [[ -n "${1:-}" ]] || die "--drop needs an avatar name"; drop["$1"]=1 ;;
+        -*) die "unknown option '$1'" ;;
+        *) names+=( "$1" ) ;;
+    esac
+    shift
+done
+
+(( ${#names[@]} )) || { echo "usage: KEYS_DIR=<dir> $(basename "$0") [--drop <avatar>]... <avatar> [avatar...]" >&2; exit 2; }
+[[ -n "${KEYS_DIR:-}" ]] || die "KEYS_DIR is not set -- the directory holding <avatar>/nostr-pubkey-hex"
+[[ -d "$KEYS_DIR" ]] || die "no keys directory at $KEYS_DIR"
+[[ -f "$CONF" ]] || die "no config.toml at $CONF"
 
 block=""
-for avatar in "$@"; do
-    hex=$(pass show "$PASS_PREFIX/$avatar/nostr-pubkey-hex" 2>/dev/null | head -1) || true
-    [ -n "$hex" ] || { echo "sync-allowlist: no $PASS_PREFIX/$avatar/nostr-pubkey-hex in pass -- mint first" >&2; exit 1; }
+declare -A want=()
+for avatar in "${names[@]}"; do
+    [[ -z "${drop[$avatar]:-}" ]] || die "'$avatar' is both listed and dropped"
+    hex=""
+    [[ -s "$KEYS_DIR/$avatar/nostr-pubkey-hex" ]] && hex="$(head -1 "$KEYS_DIR/$avatar/nostr-pubkey-hex")"
+    [[ "$hex" =~ ^[0-9a-f]{64}$ ]] || die "no usable $KEYS_DIR/$avatar/nostr-pubkey-hex -- mint first"
     block+="  \"$hex\",  # $avatar"$'\n'
+    want["$hex"]=1
 done
+
+# The keys the block holds now, as "<hex> <avatar>" (avatar empty when uncommented).
+lost=()
+while read -r hex who; do
+    [[ -n "${want[$hex]:-}" ]] && continue
+    [[ -n "$who" && -n "${drop[$who]:-}" ]] && continue
+    lost+=( "${who:-<no comment> $hex}" )
+done < <(awk '
+    /^pubkey_whitelist[[:space:]]*=[[:space:]]*\[/ { inb=1; next }
+    inb && /^\]/                                   { inb=0; next }
+    inb && match($0, /"[0-9a-f]+"/) {
+        hex=substr($0, RSTART+1, RLENGTH-2); who=""
+        if (match($0, /#[[:space:]]*[^[:space:]]+/)) { who=substr($0, RSTART+1, RLENGTH-1); sub(/^[[:space:]]+/, "", who) }
+        print hex, who }' "$CONF")
+(( ${#lost[@]} == 0 )) \
+    || die "refusing: this would drop $(printf '%s, ' "${lost[@]}" | sed 's/, $//') from $CONF -- name each with --drop <avatar> if that is meant"
 
 tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
 awk -v block="$block" '
@@ -32,6 +73,6 @@ awk -v block="$block" '
     !skip                                          { print }
 ' "$CONF" > "$tmp"
 
-grep -q '^pubkey_whitelist' "$tmp" || { echo "sync-allowlist: pubkey_whitelist not found in $CONF" >&2; exit 1; }
+grep -q '^pubkey_whitelist' "$tmp" || die "pubkey_whitelist not found in $CONF"
 cat "$tmp" > "$CONF"
-echo "sync-allowlist: $# key(s) written to $CONF -- restart the relay: docker compose restart"
+echo "sync-allowlist: ${#names[@]} key(s) written to $CONF$( (( ${#drop[@]} )) && printf ', dropped: %s' "${!drop[*]}") -- restart the relay: docker compose restart"

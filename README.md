@@ -67,7 +67,7 @@ revoking a key needs no restart.
 | `tests/gated-relay.sh` | the relay driven by a real client (`nak`), plus the real mailbox end to end |
 | `config.toml` | closed-relay config — a **pubkey allowlist** of the fleet's agents (no open registration) |
 | `registry.example.json` | the **contacts/identity** map format (`name → {npub, pubkey_hex, did:key, dids[], display}`). Each agent carries its own writable copy, generated from `pass` by `nostr-mailbox`'s `scripts/build-registry` — nothing is mounted from here |
-| `scripts/sync-allowlist` | write that allowlist from the keys in `pass` |
+| `scripts/sync-allowlist` | write that allowlist from the public keys in `$KEYS_DIR`; refuses to drop a key unless `--drop <avatar>` names it |
 | `scripts/provision` | first-time setup of relay + network, with `nostr-mailbox` checked out beside this repo |
 | `scripts/relay-status` | one-screen health check of a running relay, read-only: containers, deployed revision, allowlist vs. loaded keys, sign-ins, events, certificate expiry |
 | `tests/relay-status.sh` | its parsers on fixtures (no docker) |
@@ -110,7 +110,7 @@ keys per `MAINTAINER.md` — that allowlist is this relay's access control. The 
 ## Identities and the allowlist
 
 `scripts/mint-avatar-keys` (in `nostr-mailbox`) and `scripts/sync-allowlist` each take a
-list of agents and write the keys to `pass` and the allowlist from `pass`. Upstream drives
+list of agents: mint writes the private key to `pass` and the public halves to a keys directory (`$KEYS_DIR/<agent>/`), and the allowlist is written from that directory, so it needs no gpg. Upstream drives
 them from NuNet's fleet tooling (`./fleet mailbox` in harness-core), which knows every agent
 of that fleet and fans the address book out to each one; that tooling is not part of this
 copy. Here the allowlist is the `pubkey_whitelist` in `config.toml`, changed by pull request
