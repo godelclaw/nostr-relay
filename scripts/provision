@@ -1,32 +1,35 @@
 #!/usr/bin/env bash
 # Provision the fleet's nostr messaging in one command. MAINTAINER-run, host-side.
 #
-#   scripts/provision [--mint] <avatar> [avatar...]
+#   KEYS_DIR=<dir> scripts/provision [--mint] <avatar> [avatar...]
 #
 #   --mint   mint fresh keypairs first. OFF by default: minting REPLACES an
 #            avatar's keys, and an avatar already published must then be
 #            republished or its mailbox refuses to start.
 #
 # Runs the recorded order (MAINTAINER.md) so nobody assembles it from snippets:
-#   1. (--mint) mint-avatar-keys  -- writes nsec + pubkey-hex + npub + api-token to pass
-#   2. build-registry             -- the address book, from the PUBLIC entries in pass
-#   3. sync-allowlist             -- the relay's access control, from the same entries
+#   1. (--mint) mint-avatar-keys  -- nsec to pass, pubkey-hex + npub to $KEYS_DIR/<avatar>/
+#   2. build-registry             -- the address book, from the public files
+#   3. sync-allowlist             -- the relay's access control, from the same files
 #   4. docker compose up -d       -- relay + the shared nostr-mailbox-net
 #
-# Every key comes from pass. Nothing is retyped, nothing is read off a screen.
-# Needs docker and pass; no Go toolchain (keygen runs in a throwaway container).
+# Every public key comes from $KEYS_DIR, where mint wrote it. Nothing is retyped,
+# nothing is read off a screen, and no private key is read at all.
+# Needs docker, and pass for --mint; no Go toolchain (keygen runs in a throwaway container).
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 MAILBOX_REPO="${MAILBOX_REPO:-$(cd "$HERE/.." && pwd)/nostr-mailbox}"
 MINT=0
 [ "${1:-}" = "--mint" ] && { MINT=1; shift; }
-[ $# -gt 0 ] || { echo "usage: $(basename "$0") [--mint] <avatar> [avatar...]" >&2; exit 2; }
+[ $# -gt 0 ] || { echo "usage: KEYS_DIR=<dir> $(basename "$0") [--mint] <avatar> [avatar...]" >&2; exit 2; }
+[ -n "${KEYS_DIR:-}" ] || { echo "provision: KEYS_DIR is not set -- the directory holding <avatar>/nostr-pubkey-hex" >&2; exit 1; }
+export KEYS_DIR
 [ -x "$MAILBOX_REPO/scripts/build-registry" ] || {
     echo "provision: no nostr-mailbox repo at $MAILBOX_REPO (set MAILBOX_REPO)" >&2; exit 1; }
 
 if (( MINT )); then
-    echo "== 1. minting keypairs into pass (REPLACES any existing keys)"
+    echo "== 1. minting keypairs: pass + $KEYS_DIR (REPLACES any existing keys)"
     "$MAILBOX_REPO/scripts/mint-avatar-keys" "$@"
 else
     echo "== 1. minting skipped (--mint to replace keys)"
