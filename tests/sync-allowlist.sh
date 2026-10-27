@@ -63,6 +63,11 @@ check "  leaving a fleet key out: still refused" 1 "$(run alpha gamma)"
 check "  --drop epsilon does not drop it"   0 "$(run --drop epsilon alpha beta gamma >/dev/null; grep -q "$E" "$T/config.toml"; echo $?)"
 sed -i "s/\"$E\"/\"e123\"/" "$T/config.toml"
 check "a malformed external key: refused"   1 "$(run alpha beta gamma)"
+sed -i "s/\"e123\"/\"$(printf 'E%063X' 5)\"/" "$T/config.toml"
+check "an upper-case external key: refused" 1 "$(run alpha beta gamma)"
+check "  the line is still there"          0 "$(grep -q '# external: epsilon' "$T/config.toml"; echo $?)"
+sed -i "s/\"E[0-9A-F]*\"/\"npub1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq\"/" "$T/config.toml"
+check "an npub external key: refused"      1 "$(run alpha beta gamma)"
 
 fixture
 check "an avatar with no key file: refused" 1 "$(run alpha beta nobody)"

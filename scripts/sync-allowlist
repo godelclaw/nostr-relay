@@ -20,7 +20,8 @@
 # A key from outside the fleet -- another operator's agent, added to config.toml
 # by MR -- has no key file here. Its comment starts "# external:" and the line is
 # kept as it is, after the fleet's keys. It too is removed only by editing
-# config.toml.
+# config.toml. One key per line, as lowercase 64-hex: any other key (upper case,
+# an npub) is refused, never dropped.
 #
 # Idempotent: rewrites the pubkey_whitelist block in place and leaves the rest of
 # config.toml untouched. Restart the relay afterwards to load it.
@@ -78,11 +79,12 @@ while read -r hex who; do
     [[ -n "${want[$hex]:-}" || -n "${ext[$hex]:-}" ]] && continue
     [[ -n "$who" && -n "${drop[$who]:-}" ]] && continue
     [[ -n "$who" && -n "${listed[$who]:-}" ]] && continue   # rotated: replaced, not dropped
+    [[ "$who" == external:* ]] && who="external key $hex"
     lost+=( "${who:-<no comment> $hex}" )
 done < <(awk '
     /^pubkey_whitelist[[:space:]]*=[[:space:]]*\[/ { inb=1; next }
     inb && /^\]/                                   { inb=0; next }
-    inb && match($0, /"[0-9a-f]+"/) {
+    inb && match($0, /"[^"]*"/) {
         hex=substr($0, RSTART+1, RLENGTH-2); who=""
         if (match($0, /#[[:space:]]*[^[:space:]]+/)) { who=substr($0, RSTART+1, RLENGTH-1); sub(/^[[:space:]]+/, "", who) }
         print hex, who }' "$CONF")
