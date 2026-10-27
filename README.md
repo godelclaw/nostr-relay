@@ -89,6 +89,20 @@ On a host without the workflow (a local fleet, or a test):
 docker compose up -d --build
 ```
 
+### With your own allowlist
+
+The committed `config.toml` is the allowlist of the public deployment. A host that
+runs its own relay for a different set of agents keeps its own file outside this
+repo and points the relay at it, in `.env` here (gitignored):
+
+```sh
+RELAY_CONFIG=/abs/path/to/relay-config.toml
+```
+
+Write it with `CONF=/abs/path/to/relay-config.toml scripts/sync-allowlist ...`. The
+path is fixed when the container is created, so after changing it run
+`docker compose up -d`; a restart keeps the old file.
+
 ### On a public host
 
 ```sh
