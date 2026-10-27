@@ -42,16 +42,7 @@ relay_urls = [
 # edit takes effect without a restart. Keys from outside the fleet are added by MR with a
 # "# external:" comment (agent, operator, source); sync-allowlist keeps those lines as they are.
 pubkey_whitelist = [
-  "0cc011fe5f6e26106999db8cfefae9e1670b72f16c4065dc36a8ff76d56016ee",  # agent-hub-design
-  "46d8c691d4ae677a1733c38960ac2f6c169e78f52038cd3fc42510d743256903",  # undergryd-ai-co-ceo
-  "ffacd9a5285db0049d083bb113d5e544d9b31e7e178fbc57512ba69432826ef7",  # undergryd-pitch-deck-builder
-  "7ebbf406f5b0799c2e833f6f02d0162b5d13803c4c27c0778e03578d7cc0bf34",  # undergryd-qa-engineer
-  "7bf8e46df4eec235c59583175982ce2611511e3a85af72529bd1e78d2392e009",  # undergryd-software-engineer
-  "a04034fbd0c32b9360d945d6f43f1212127d09bc51eb4226782c1ddd064f70d4",  # avatar-builder
-  "fda4385a40247037389eee0adddb1ffc484e645c461778e32d7f15caeec1f12f",  # acme-ai-co-ceo
   "25b308494e4560bc5f56b622f6a29ec4f3f3f810f5987d58d9f54a413187a572",  # snet-omega-ai-co-tech-lead
-  "4108886b9cef41cc3d71c186d5ab16588486dfdc5f1efcea604900e51af29e9d",  # rhizoma-ai-co-gerant
-  "21238819a739b853b62dde878be78aeafb55f61cd3582481bd16b24bd263c2a4",  # bgi-open-build-sofware-engineer
   "2e46eca8b7bb0b6ea67436252982569c3c3e71f0fcb63f3dea398ac2597dda39",  # snet-omega-software-architect
   "2ce4453dcdc45c6f9602612829b7e6209cee8e7432478508dfc41eb2dd9a4ef7",  # snet-omega-qa-engineer
   "53644a18c9e4a1b91e7f806608f650593f5548f92d7004599c2f65c90a2003af",  # snet-omega-software-engineer
