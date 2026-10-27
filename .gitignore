@@ -1,3 +1,5 @@
 .worktrees/
 __pycache__/
 deploy-state/
+# Host-local compose settings, e.g. RELAY_CONFIG (see README, Run by hand).
+.env

@@ -32,7 +32,10 @@ services:
     init: true
     volumes:
       # Read-only, and re-read on change: sync-allowlist edits it, no restart needed.
-      - ./config.toml:/usr/src/app/config.toml:ro
+      # RELAY_CONFIG (in .env, or the environment) points it at a file outside this
+      # repo, for a host that runs its own relay with its own allowlist. It is
+      # fixed when the container is created: changing it needs `up -d`, not restart.
+      - ${RELAY_CONFIG:-./config.toml}:/usr/src/app/config.toml:ro
       - relay-db:/usr/src/app/db
     restart: unless-stopped
     depends_on:
