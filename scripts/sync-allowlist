@@ -17,6 +17,11 @@
 # new key replaces the old). A key in the block without a "# <avatar>" comment
 # cannot be named, so it can only be removed by editing config.toml.
 #
+# A key from outside the fleet -- another operator's agent, added to config.toml
+# by MR -- has no key file here. Its comment starts "# external:" and the line is
+# kept as it is, after the fleet's keys. It too is removed only by editing
+# config.toml.
+#
 # Idempotent: rewrites the pubkey_whitelist block in place and leaves the rest of
 # config.toml untouched. Restart the relay afterwards to load it.
 set -euo pipefail
@@ -52,10 +57,25 @@ for avatar in "${names[@]}"; do
     want["$hex"]=1
 done
 
+# External keys, kept verbatim. A fleet avatar holding the same key keeps it as its own.
+declare -A ext=()
+external=""
+while IFS= read -r line; do
+    [[ "$line" =~ \"([0-9a-f]{64})\" ]] || continue
+    hex="${BASH_REMATCH[1]}"
+    [[ -n "${want[$hex]:-}" || -n "${ext[$hex]:-}" ]] && continue
+    ext["$hex"]=1
+    external+="$line"$'\n'
+done < <(awk '
+    /^pubkey_whitelist[[:space:]]*=[[:space:]]*\[/ { inb=1; next }
+    inb && /^\]/                                   { inb=0; next }
+    inb && /#[[:space:]]*external:/' "$CONF")
+block+="$external"
+
 # The keys the block holds now, as "<hex> <avatar>" (avatar empty when uncommented).
 lost=()
 while read -r hex who; do
-    [[ -n "${want[$hex]:-}" ]] && continue
+    [[ -n "${want[$hex]:-}" || -n "${ext[$hex]:-}" ]] && continue
     [[ -n "$who" && -n "${drop[$who]:-}" ]] && continue
     [[ -n "$who" && -n "${listed[$who]:-}" ]] && continue   # rotated: replaced, not dropped
     lost+=( "${who:-<no comment> $hex}" )
@@ -78,4 +98,4 @@ awk -v block="$block" '
 
 grep -q '^pubkey_whitelist' "$tmp" || die "pubkey_whitelist not found in $CONF"
 cat "$tmp" > "$CONF"
-echo "sync-allowlist: ${#names[@]} key(s) written to $CONF$( (( ${#drop[@]} )) && printf ', dropped: %s' "${!drop[*]}") -- restart the relay: docker compose restart"
+echo "sync-allowlist: ${#names[@]} key(s) written to $CONF$( (( ${#ext[@]} )) && printf ', %s external kept' "${#ext[@]}")$( (( ${#drop[@]} )) && printf ', dropped: %s' "${!drop[*]}") -- restart the relay: docker compose restart"

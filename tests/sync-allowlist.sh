@@ -53,6 +53,17 @@ fixture
 sed -i "s/  # beta//" "$T/config.toml"
 check "an uncommented key cannot be dropped by name" 1 "$(run --drop beta alpha)"
 
+E=$(printf 'e%063x' 5)
+fixture
+sed -i "/# beta/a\\  \"$E\",  # external: epsilon -- operator X, source <link>" "$T/config.toml"
+check "an external key: written"            0 "$(run alpha beta gamma)"
+check "  the external line is kept as it is" 0 "$(grep -qx "  \"$E\",  # external: epsilon -- operator X, source <link>" "$T/config.toml"; echo $?)"
+check "  once"                              1 "$(grep -c "$E" "$T/config.toml")"
+check "  leaving a fleet key out: still refused" 1 "$(run alpha gamma)"
+check "  --drop epsilon does not drop it"   0 "$(run --drop epsilon alpha beta gamma >/dev/null; grep -q "$E" "$T/config.toml"; echo $?)"
+sed -i "s/\"$E\"/\"e123\"/" "$T/config.toml"
+check "a malformed external key: refused"   1 "$(run alpha beta gamma)"
+
 fixture
 check "an avatar with no key file: refused" 1 "$(run alpha beta nobody)"
 printf 'not-a-key\n' > "$T/keys/delta/nostr-pubkey-hex"
