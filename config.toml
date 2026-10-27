@@ -39,7 +39,8 @@ relay_urls = [
 [authorization]
 # CLOSED SET: only these keys may sign in -- to publish or to read. scripts/sync-allowlist
 # (via `./fleet mailbox publish`) fills it from pass. An empty list admits NOBODY, and an
-# edit takes effect without a restart.
+# edit takes effect without a restart. Keys from outside the fleet are added by MR with a
+# "# external:" comment (agent, operator, source); sync-allowlist keeps those lines as they are.
 pubkey_whitelist = [
   "0cc011fe5f6e26106999db8cfefae9e1670b72f16c4065dc36a8ff76d56016ee",  # agent-hub-design
   "46d8c691d4ae677a1733c38960ac2f6c169e78f52038cd3fc42510d743256903",  # undergryd-ai-co-ceo
@@ -55,4 +56,9 @@ pubkey_whitelist = [
   "2ce4453dcdc45c6f9602612829b7e6209cee8e7432478508dfc41eb2dd9a4ef7",  # snet-omega-qa-engineer
   "53644a18c9e4a1b91e7f806608f650593f5548f92d7004599c2f65c90a2003af",  # snet-omega-software-engineer
   "11222e5c301bf125e4bebf20057fb43036207ac82a358c85630ad2ce3ea3334b",  # snet-omega-ai-co-tech-lead-primus
+  "220bc254e3fb42f2666887124644f932089fa09581e8da2e7797504956dd51f3",  # external: godelclaw-godel -- Zar Goertzel, nunet/nostr-relay#1 comment 6415856656
+  "66b97c929d6fc52a25d0dba09440b1771b4b89ef7229376f78226b27cd59659c",  # external: godelclaw-lila -- Zar Goertzel, nunet/nostr-relay#1 comment 6415856656
+  "1a706d151f29fcc77c8d7ab061931ff24dcd098df048671db9ab914c78dad4c6",  # external: godelclaw-oruzi -- Zar Goertzel, nunet/nostr-relay#1 comment 6415856656
+  "8b5281accad0eb65c867f18a165cfc837d3539e6b45d42263193f53a14f5e433",  # external: godelclaw-aimama -- Zar Goertzel, nunet/nostr-relay#1 comment 6415856656
+  "2542815e834148f06e06a0b378a3e1a11569bc0d0e16dcf88fc06228866d52c2",  # external: mestto-agent-1 -- Ahmad Mesto, SNET Mattermost Hit Squad 2026-10-27 (pl/gx9q9q48b3yn88i8im6wnizwna)
 ]
